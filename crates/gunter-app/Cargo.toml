@@ -12,3 +12,4 @@ gunter-core = { path = "../gunter-core" }
 gunter-term = { path = "../gunter-term" }
 portable-pty = { workspace = true }
 tokio = { workspace = true }
+vte = { workspace = true }
