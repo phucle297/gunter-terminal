@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>v0.1.0 Code Review — gunter-terminal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: #333; background: #fafafa; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 30px; }
+        h1 { color: #1a73e8; margin-bottom: 10px; border-bottom: 3px solid #1a73e8; padding-bottom: 10px; }
+        h2 { color: #202124; margin-top: 30px; margin-bottom: 15px; border-left: 4px solid #1a73e8; padding-left: 12px; }
+        h3 { color: #3c4043; margin-top: 20px; margin-bottom: 10px; }
+        .summary { background: #f0f7ff; border-left: 4px solid #1a73e8; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+        .summary-verdict { font-weight: bold; font-size: 1.1em; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e8eaed; }
+        th { background: #f0f7ff; font-weight: 600; color: #1a73e8; }
+        tr:hover { background: #f9f9f9; }
+        .critical { background: #fff5f5; border-left: 4px solid #d32f2f; }
+        .critical-label { color: white; background: #d32f2f; padding: 2px 8px; border-radius: 3px; font-size: 0.9em; font-weight: 600; }
+        .major { background: #fff8f0; border-left: 4px solid #f57c00; }
+        .major-label { color: white; background: #f57c00; padding: 2px 8px; border-radius: 3px; font-size: 0.9em; font-weight: 600; }
+        .minor { background: #fffbf0; border-left: 4px solid #fbc02d; }
+        .minor-label { color: #333; background: #fbc02d; padding: 2px 8px; border-radius: 3px; font-size: 0.9em; font-weight: 600; }
+        .info { background: #f0f7ff; border-left: 4px solid #1976d2; }
+        .info-label { color: white; background: #1976d2; padding: 2px 8px; border-radius: 3px; font-size: 0.9em; font-weight: 600; }
+        .code { background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; padding: 12px; font-family: "Courier New", monospace; font-size: 0.9em; overflow-x: auto; margin: 10px 0; }
+        .file-ref { font-family: "Courier New", monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 0.95em; }
+        .pass { color: #28a745; font-weight: 600; }
+        .fail { color: #d32f2f; font-weight: 600; }
+        .warning { color: #f57c00; font-weight: 600; }
+        .checkbox { display: inline-block; width: 20px; height: 20px; border: 2px solid #e8eaed; border-radius: 3px; margin-right: 8px; vertical-align: middle; }
+        .checkbox.checked { background: #34a853; border-color: #34a853; }
+        .checkbox.checked::after { content: "✓"; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+        .unchecked { opacity: 0.5; }
+        ul { margin-left: 20px; margin-bottom: 15px; }
+        li { margin-bottom: 8px; }
+        .commit-log { background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; padding: 12px; font-family: "Courier New", monospace; font-size: 0.9em; max-height: 400px; overflow-y: auto; }
+        .totals { background: #f0f7ff; border: 2px solid #1a73e8; border-radius: 4px; padding: 15px; margin-top: 20px; font-weight: 600; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+<h1>gunter-terminal v0.1.0 Code Review</h1>
+
+<div class="summary">
+    <div class="summary-verdict">Overall Verdict: <span class="warning">CONDITIONAL PASS</span></div>
+    <p><strong>Commit Range:</strong> <span class="file-ref">ff76bd5</span> (chore: switch bd sync remote) to <span class="file-ref">98f65f0</span> (feat: merge v0.1-app)</p>
+    <p><strong>Scope:</strong> Core PTY loop, Grid/Cell/CellFlags, VTE Performer, Cargo workspace config</p>
+    <p><strong>Phase 1 Exit Condition:</strong> ✓ Implemented correctly (echo hello will display in grid)</p>
+    <p><strong>Key Finding:</strong> 1 Critical bug (parser state lost per iteration), 2 Major gaps, 3 Minor issues, 1 Design note</p>
+</div>
+
+<!-- ============================================================================ -->
+<h2>Test Coverage</h2>
+<table>
+    <tr>
+        <th>Test Suite</th>
+        <th>Coverage</th>
+        <th>Count</th>
+        <th>Gaps / Notes</th>
+    </tr>
+    <tr>
+        <td><strong>grid.rs tests</strong><br/>Basic grid operations</td>
+        <td>Grid creation, cell write, dirty flag, cursor movement</td>
+        <td>4 tests</td>
+        <td>✓ Core bounds checking; ✗ No test for cursor clamp beyond row.saturating_sub(1); ✗ No scrollback operations (not used yet)</td>
+    </tr>
+    <tr>
+        <td><strong>performer.rs tests</strong><br/>VTE parsing integration</td>
+        <td>Print, CSI cursor movement (H/f/A/B/C/D), SGR color/flags, newline/CR</td>
+        <td>19 tests</td>
+        <td>✓ Comprehensive coverage of CSI sequences; ✗ No test for column 80 wrap (last column behavior); ✗ No test for tab character; ✗ SGR bold/italic/underline tested, but not BLINK or INVERSE flags</td>
+    </tr>
+    <tr>
+        <td><strong>main.rs tests</strong><br/>PTY integration</td>
+        <td>Plain text, ANSI colors, cursor position tracking</td>
+        <td>3 tests</td>
+        <td>✓ End-to-end grid fill test; ✗ No test for parser reuse across loop iterations; ✗ No error handling tests (PTY disconnect)</td>
+    </tr>
+</table>
+
+<p><strong>Test Totals:</strong> 26 unit + integration tests. Main coverage gaps: column wrap, tab char, flag combinations, parser state lifecycle.</p>
+
+<!-- ============================================================================ -->
+<h2>Findings</h2>
+
+<table>
+    <tr>
+        <th>File:Line</th>
+        <th>Severity</th>
+        <th>Description</th>
+        <th>Fix Recommendation</th>
+    </tr>
+    <tr class="critical">
+        <td><span class="file-ref">main.rs:34</span></td>
+        <td><span class="critical-label">CRITICAL</span></td>
+        <td>Parser is created fresh on <strong>each loop iteration</strong>. Parser state (escape sequence buffer, intermediate bytes) is lost between reads. A multi-byte escape sequence split across socket boundaries will be dropped.</td>
+        <td>Move <code>let mut parser = vte::Parser::new();</code> outside the read loop (line 26, before loop). Parser is stateful and must persist across iterations.</td>
+    </tr>
+    <tr class="major">
+        <td><span class="file-ref">performer.rs:49-56</span></td>
+        <td><span class="major-label">MAJOR</span></td>
+        <td>When cursor advances past column 79 (last col on 80-col grid), it stays at col 79. This prevents proper line wrapping. Spec does not define wrap behavior yet, but current behavior may confuse multi-line output. Test <span class="file-ref">performer.rs:185-194</span> assumes sequential positioning, not wrap.</td>
+        <td>Clarify Phase 1 spec: should col 79 + print wrap to (0, +1) or stay at (79, y)? Current code stays — document this. Add test for col 79 boundary condition.</td>
+    </tr>
+    <tr class="major">
+        <td><span class="file-ref">performer.rs:62-69</span></td>
+        <td><span class="major-label">MAJOR</span></td>
+        <td>When cursor is at last row (y=23 on 24-row grid) and a newline arrives, cursor stays at row 23. Scrollback queue exists but is never populated. Text will be overwritten. This is acceptable for Phase 1 (spec says "scroll not yet implemented"), but it's a silent data loss.</td>
+        <td>For Phase 1: Add comment noting this is deferred to Phase 2. For Phase 2: implement scrollback push and line clear on bottom newline. Mark <code>scrollback</code> field as Phase 2+ only.</td>
+    </tr>
+    <tr class="minor">
+        <td><span class="file-ref">grid.rs:20</span></td>
+        <td><span class="minor-label">MINOR</span></td>
+        <td><code>CellFlags::NONE = 0</code> in bitflags macro. While valid in bitflags 2.x (field value 0 is allowed), it's unconventional. Most bitflags omit NONE entirely and rely on default zero. Minor code smell.</td>
+        <td>Optional: Remove <code>const NONE = 0;</code> and let users write <code>CellFlags::empty()</code> or <code>CellFlags(0)</code>. Or keep as-is for explicitness. Not a bug.</td>
+    </tr>
+    <tr class="minor">
+        <td><span class="file-ref">performer.rs:126-131</span></td>
+        <td><span class="minor-label">MINOR</span></td>
+        <td>SGR reset (code 0) correctly clears fg, bg, and flags. But SGR with no params (bare <code>\x1b[m</code>) is tested to act as reset (test line 333-340). This is spec-compliant but the code path uses a peekable iterator check — slightly fragile if vte::Params behavior changes.</td>
+        <td>Add inline comment explaining: bare <code>\x1b[m</code> has zero params, so we peek and reset. Consider explicit test for edge case: <code>\x1b[;31m</code> (leading semicolon).</td>
+    </tr>
+    <tr class="info">
+        <td><span class="file-ref">main.rs:22</span></td>
+        <td><span class="info-label">INFO</span></td>
+        <td><code>CommandBuilder::new("wsl.exe")</code> is hardcoded. Spec (section Default Config, line 93) says <code>[shell] program = "wsl.exe"</code> should be configurable. Phase 1 doesn't implement config loading, but this is a known gap.</td>
+        <td>For Phase 5 (Config): move hardcoded program to config file. Phase 1 is acceptable as-is; just document the future config key.</td>
+    </tr>
+</table>
+
+<div class="totals">
+    <strong>Findings Totals:</strong> 1 Critical | 2 Major | 2 Minor | 1 Info
+</div>
+
+<!-- ============================================================================ -->
+<h2>Spec Compliance — Phase 1 Checklist</h2>
+
+<p>Phase 1 Goal: type a command in WSL and see ASCII output. Exit condition: <code>echo hello</code> prints "hello" in grid.</p>
+
+<table>
+    <tr>
+        <th>Requirement</th>
+        <th>Status</th>
+        <th>Notes</th>
+    </tr>
+    <tr>
+        <td>Cargo workspace with gunter-core, gunter-term, gunter-app</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>All three crates created, workspace resolver="2"</td>
+    </tr>
+    <tr>
+        <td>PTY opened with portable_pty::native_pty_system()</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>main.rs line 17-20: openpty with PtySize 24x80</td>
+    </tr>
+    <tr>
+        <td>wsl.exe spawned into PTY slave</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>main.rs line 22-23: spawn_command with CommandBuilder</td>
+    </tr>
+    <tr>
+        <td>Read PTY stdout in loop, push bytes to vte::Parser</td>
+        <td><span class="warning">⚠ PARTIAL</span></td>
+        <td>Bytes are read (line 30-40) and pushed to parser, but parser is recreated each iteration (CRITICAL BUG #1)</td>
+    </tr>
+    <tr>
+        <td>vte::Perform impl writes to Grid</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>GridPerformer implements vte::Perform; print, execute, csi_dispatch all write to grid via write_cell</td>
+    </tr>
+    <tr>
+        <td>Grid supports basic operations: write_cell, cursor_move, dirty tracking</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>Grid::write_cell (line 77-83), cursor_move (line 93-98), clear_dirty (line 86-90)</td>
+    </tr>
+    <tr>
+        <td>Print grid to stdout (no GPU rendering)</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>main.rs line 6-14: print_grid function outputs character grid to stdout</td>
+    </tr>
+    <tr>
+        <td>Atom One Dark color palette available</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>performer.rs line 4-18: DEFAULT_FG/BG and ANSI_COLORS array match Atom One Dark spec</td>
+    </tr>
+    <tr>
+        <td>Support CSI cursor movement (H/f, A/B/C/D)</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>performer.rs lines 88-122: all 6 cursor commands tested and working</td>
+    </tr>
+    <tr>
+        <td>Support SGR color/attribute codes (30-37, 40-47, 0, 1, 3, 4)</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>performer.rs lines 124-150: SGR handler covers fg, bg, bold, italic, underline, reset</td>
+    </tr>
+    <tr>
+        <td>Support C0 control: newline (\n), carriage return (\r)</td>
+        <td><span class="pass">✓ DONE</span></td>
+        <td>performer.rs lines 60-77: execute() handles \n (move down) and \r (move to col 0)</td>
+    </tr>
+</table>
+
+<p style="margin-top: 15px;"><strong>Phase 1 Verdict:</strong> <span class="pass">✓ SPEC COMPLIANT (with 1 critical parser bug)</span> — All exit condition requirements met, but CRITICAL BUG #1 (parser recreation) must be fixed before shipping.</p>
+
+<!-- ============================================================================ -->
+<h2>Not in Spec — Extensions &amp; Extra Features</h2>
+
+<ul>
+    <li><strong>Dirty flag tracking:</strong> Grid maintains per-cell dirty state. Required for Phase 2 GPU renderer optimization, implemented proactively.</li>
+    <li><strong>VecDeque scrollback buffer:</strong> Grid reserves space for scrollback history (not populated). Preparation for Phase 2 scroll behavior.</li>
+    <li><strong>BLINK &amp; INVERSE flags:</strong> CellFlags includes BLINK (0b00001000) and INVERSE (0b00010000), but SGR handler doesn't set them. Code is there for Phase 2.</li>
+    <li><strong>Integration tests in main.rs:</strong> Three end-to-end tests (plain_text, ansi_colors, cursor_position) go beyond unit tests — good sign of quality.</li>
+</ul>
+
+<!-- ============================================================================ -->
+<h2>Must Review Before v0.2 (GPU Renderer Phase)</h2>
+
+<ul>
+    <li><strong>CRITICAL:</strong> Fix parser state leak (main.rs:34). Parser must be created once, outside the loop.</li>
+    <li><strong>MAJOR:</strong> Implement scrollback push on bottom newline. Current code silently overwrites last row (data loss). Grid.scrollback field should push old rows and clear current row.</li>
+    <li><strong>MAJOR:</strong> Define and test line wrap behavior at column 80. Spec doesn't yet define: does col 79 + print wrap to (0, y+1) or overflow silently? Add test and comment.</li>
+    <li><strong>Minor:</strong> Test BLINK and INVERSE SGR codes before Phase 2 GPU work. Currently set but untested.</li>
+    <li><strong>Minor:</strong> Test tab character (\t) handling. Not mentioned in performer.rs — will it print as space or be handled by vte parser?</li>
+    <li><strong>Minor:</strong> Test double-width characters and Nerd Font icons. Grid stores char, but GPU renderer (Phase 2) must handle glyph metrics.</li>
+    <li><strong>Config:</strong> Phase 1 uses hardcoded wsl.exe. Phase 5 will load from config — but no blocker now.</li>
+</ul>
+
+<!-- ============================================================================ -->
+<h2>Commit Log (v0.1.0 Implementation)</h2>
+
+<p><strong>Range:</strong> <code>ff76bd5</code> (base) → <code>98f65f0</code> (develop HEAD)</p>
+
+<div class="commit-log">98f65f0 feat: merge v0.1-app — PTY loop + main binary + integration tests (3u7)
+c4ca7e0 feat: add 3u7 PTY loop report and close issue
+9083e5b feat: PTY loop + main binary with integration tests (3u7)
+895e0b5 feat: merge v0.1-term — GridPerformer VTE TDD (f9s); resolve grid.rs conflict keeping bitflags+NONE+bounds-check
+0661f4b feat: merge v0.1-grid — Grid/Cell/CellFlags TDD (5wa)
+49516d9 feat: add f9s-term report and close GridPerformer issue
+cbea28d feat: implement GridPerformer VTE with TDD tests (f9s)
+f450eed feat: implement Grid/Cell/CellFlags with TDD tests (5wa)
+f20ec12 feat: merge v0.1-scaffold — Cargo workspace + crate skeletons
+e0fba58 feat: scaffold Cargo workspace + crate skeletons for v0.1.0
+</div>
+
+<p style="margin-top: 15px;"><strong>Commit Quality:</strong> Clear task IDs (3u7, f9s, 5wa) in titles. Proper merge commits preserve history. TDD approach evident from "implement X with TDD tests" pattern. Good discipline.</p>
+
+<!-- ============================================================================ -->
+<h2>Cargo Dependency Review</h2>
+
+<table>
+    <tr>
+        <th>Dependency</th>
+        <th>Version</th>
+        <th>Usage</th>
+        <th>Status</th>
+    </tr>
+    <tr>
+        <td>vte</td>
+        <td>0.13</td>
+        <td>ANSI escape parser</td>
+        <td><span class="pass">✓ Correct</span> — Zero-alloc, stable, widely used (Alacritty, WezTerm)</td>
+    </tr>
+    <tr>
+        <td>portable-pty</td>
+        <td>0.8</td>
+        <td>PTY allocation + command spawn</td>
+        <td><span class="pass">✓ Correct</span> — Only Phase 1 crate that touches PTY. Version 0.8 is stable.</td>
+    </tr>
+    <tr>
+        <td>bitflags</td>
+        <td>2</td>
+        <td>CellFlags bit manipulation</td>
+        <td><span class="pass">✓ Correct</span> — Modern bitflags 2.x (not 1.x). Macro works as used.</td>
+    </tr>
+    <tr>
+        <td>tokio</td>
+        <td>1 (full features)</td>
+        <td>Not yet used in Phase 1</td>
+        <td><span class="warning">⚠ Premature</span> — Workspace declares tokio["full"] but Phase 1 doesn't use it. Phase 2 will need it for async wgpu. Not a blocker, just over-specified.</td>
+    </tr>
+    <tr>
+        <td>uuid, serde, toml</td>
+        <td>1 / 1 / 0.8</td>
+        <td>Future phases (session IDs, config parsing)</td>
+        <td><span class="warning">⚠ Premature</span> — Not used in v0.1.0. Declared in workspace but not pulled into Phase 1 crates. Acceptable for scaffolding.</td>
+    </tr>
+</table>
+
+<p style="margin-top: 15px;"><strong>Verdict:</strong> Core dependencies (vte, portable-pty, bitflags) are correct. Workspace over-specifies tokio/uuid/serde/toml for future phases, but this is a scaffolding practice. No blocker.</p>
+
+<!-- ============================================================================ -->
+<h2>Code Quality Observations</h2>
+
+<ul>
+    <li><strong>Bounds checking:</strong> Grid.write_cell uses explicit bounds check (line 78). Correct but verbose — could use unchecked_mut if performance critical later.</li>
+    <li><strong>Cursor clamping:</strong> cursor_move uses saturating_sub to prevent underflow, min to prevent overflow. Safe but could be simpler with clamp() (Rust 1.50+).</li>
+    <li><strong>Cell defaults:</strong> Cell::blank() hardcodes Atom One Dark colors. Correct per spec, but not configurable (Phase 5 will fix).</li>
+    <li><strong>Color struct:</strong> Simple RGB u8 tuple. No alpha channel (correct — terminals don't use alpha). Endianness: platform-dependent (should be explicit for Phase 2 GPU).</li>
+    <li><strong>Test organization:</strong> Each module has cfg(test) block with focused tests. Good separation. Main.rs integration tests are well-named and short.</li>
+    <li><strong>Parser state:</strong> GridPerformer stores fg, bg, flags across calls. This is correct stateful design — except parser itself is recreated (BUG #1).</li>
+</ul>
+
+<!-- ============================================================================ -->
+<h2>Summary &amp; Recommendation</h2>
+
+<p><strong>gunter-terminal v0.1.0 is feature-complete for Phase 1 but has a critical runtime bug.</strong></p>
+
+<p><strong>Strengths:</strong></p>
+<ul>
+    <li>Clean modular design (gunter-core, gunter-term, gunter-app separation)</li>
+    <li>Comprehensive test coverage (26 tests, all passing)</li>
+    <li>Spec compliance: all Phase 1 exit criteria met (cursor, colors, control codes)</li>
+    <li>Good commit hygiene and TDD discipline</li>
+    <li>Proper use of Rust safety (no unsafe, proper error handling with expect)</li>
+</ul>
+
+<p><strong>Blockers for v0.2:</strong></p>
+<ul>
+    <li>CRITICAL: Parser state is lost per read loop iteration. Multi-byte escape sequences split across socket reads will be corrupted. Fix: move <code>vte::Parser::new()</code> outside loop.</li>
+</ul>
+
+<p><strong>Known gaps (Phase 1 acceptable, Phase 2+ must address):</strong></p>
+<ul>
+    <li>No scrollback push (text is silently overwritten at bottom row)</li>
+    <li>No line wrapping (col 79 + print stays in place)</li>
+    <li>No config loading (hardcoded wsl.exe)</li>
+    <li>BLINK, INVERSE flags not tested</li>
+    <li>Tab character behavior undefined</li>
+</ul>
+
+<p><strong>Verdict:</strong> <span class="warning">CONDITIONAL PASS</span> — Approve for v0.1.0 tag once parser bug is fixed. Code is otherwise production-ready for CLI use (echo/ls/basic shells work). Do not start Phase 2 GPU renderer until parser state bug is fixed; it will hide the bug under async complexity.</p>
+
+</div>
+</body>
+</html>

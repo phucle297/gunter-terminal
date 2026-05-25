@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>5wa Grid TDD Report</title>
+<style>
+  body { font-family: monospace; max-width: 800px; margin: 2em auto; background: #1e1e1e; color: #d4d4d4; padding: 1em; }
+  h1 { color: #4fc1ff; }
+  h2 { color: #9cdcfe; border-bottom: 1px solid #333; padding-bottom: 0.3em; }
+  code, pre { background: #252526; padding: 0.2em 0.4em; border-radius: 3px; color: #ce9178; }
+  pre { padding: 1em; overflow-x: auto; }
+  .pass { color: #4ec9b0; }
+  .fail { color: #f44747; }
+  .note { color: #dcdcaa; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #444; padding: 0.5em 1em; text-align: left; }
+  th { background: #2d2d2d; color: #9cdcfe; }
+</style>
+</head>
+<body>
+
+<h1>5wa Grid TDD Implementation Report</h1>
+
+<h2>Commit</h2>
+<p><code>f450eed</code> — feat: implement Grid/Cell/CellFlags with TDD tests (5wa)</p>
+<p>Branch: <code>feat/v0.1-grid</code></p>
+
+<h2>Crate Dependency: why bitflags?</h2>
+<p>
+  <code>bitflags</code> is the de-facto standard Rust crate for typed bitfield structs.
+  It generates a newtype wrapper around a primitive integer with named constants,
+  zero-cost set/test/clear operations (all inline, no heap allocation), and derives
+  <code>Clone / Debug / PartialEq</code> automatically.  It is widely used across the
+  Rust terminal ecosystem (crossterm, alacritty, wezterm) which makes it an obvious
+  choice for terminal cell attribute flags.
+</p>
+
+<h2>TDD Sequence</h2>
+
+<table>
+  <tr><th>Phase</th><th>Action</th><th>Result</th></tr>
+  <tr>
+    <td>Red</td>
+    <td>Write <code>#[cfg(test)]</code> block with 4 tests; no types defined yet</td>
+    <td class="fail">FAIL — compiler errors: <code>Cell</code>, <code>Color</code>, <code>CellFlags</code>, <code>Grid</code> not found in scope</td>
+  </tr>
+  <tr>
+    <td>Green</td>
+    <td>Add <code>Color</code>, <code>CellFlags</code>, <code>Cell</code>, <code>Grid</code> structs and all four methods</td>
+    <td class="pass">PASS — 4/4 tests ok, 0 failed</td>
+  </tr>
+</table>
+
+<h3>First failing test and why</h3>
+<p>
+  <code>grid_creation_has_correct_dimensions</code> was the first compilation error:
+  <code>Grid::new</code> did not exist.  Once <code>Grid</code> and <code>Grid::new</code> were
+  introduced, this test passed immediately because the <code>cells</code> vec is allocated
+  as <code>vec![Cell::blank(); cols as usize * rows as usize]</code>.
+</p>
+
+<h3>How implementation made each test pass</h3>
+<ul>
+  <li><strong>grid_creation_has_correct_dimensions</strong>: <code>Grid::new</code> stores <code>cols</code>/<code>rows</code> and allocates <code>cols*rows</code> cells.</li>
+  <li><strong>cell_write_sets_dirty_flag</strong>: <code>write_cell</code> computes <code>idx = y*cols+x</code> and sets <code>dirty[idx] = true</code> after writing.</li>
+  <li><strong>clear_dirty_resets_all_flags</strong>: <code>clear_dirty</code> iterates <code>&amp;mut self.dirty</code> and sets every element to <code>false</code>.</li>
+  <li><strong>cursor_move_updates_position</strong>: <code>cursor_move</code> is a single assignment <code>self.cursor = (x, y)</code>.</li>
+</ul>
+
+<h2>What is NOT in scope for this task</h2>
+<ul>
+  <li><strong>Scrollback push logic</strong> — pushing rows into <code>VecDeque&lt;Vec&lt;Cell&gt;&gt;</code> belongs to the <code>gunter-term</code> crate (screen-scroll handling).</li>
+  <li><strong>ANSI / VT escape colour parsing</strong> — mapping escape sequences to <code>Color</code> values is <code>gunter-term</code> territory; this crate only defines the data type.</li>
+  <li><strong>Bounds-checking panics vs. silent drop</strong> — <code>write_cell</code> currently silently drops out-of-bounds writes; the policy decision is deferred to the renderer task.</li>
+</ul>
+
+<h2>What Reviewer Should Check</h2>
+<ul>
+  <li>
+    <strong>Dirty flag index formula</strong>: <code>y * cols + x</code> (row-major).
+    Confirm this matches the renderer's iteration order to avoid off-by-one in partial redraws.
+  </li>
+  <li>
+    <strong>Bounds checking policy</strong>: <code>write_cell</code> performs a bounds check
+    (<code>if idx &lt; self.cells.len()</code>) and silently ignores out-of-range writes.
+    If a hard panic is preferred for debug builds, add <code>debug_assert!(idx &lt; self.cells.len())</code>.
+  </li>
+  <li>
+    <strong><code>Cell::blank()</code></strong>: Uses <code>Color::white()</code> fg / <code>Color::black()</code> bg.
+    If the project's default palette differs, update the constants here.
+  </li>
+  <li>
+    <strong>Scrollback field</strong>: <code>VecDeque&lt;Vec&lt;Cell&gt;&gt;</code> is present but never
+    populated by this crate.  Reviewers should verify no other crate accidentally writes to
+    it before the scrollback task is implemented.
+  </li>
+</ul>
+
+<h2>Notable Design Decisions</h2>
+<ul>
+  <li>
+    <strong><code>Cell::blank()</code></strong> provides a canonical default cell for
+    <code>vec![Cell::blank(); n]</code> initialization, avoiding repeated struct literals
+    scattered across the codebase.
+  </li>
+  <li>
+    <strong>All public fields</strong>: <code>Grid</code> fields are <code>pub</code> intentionally
+    to let the renderer and term crates read them directly without accessor boilerplate in v0.1.
+    Encapsulation can be tightened in a later refactor.
+  </li>
+</ul>
+
+<h2>Test Output</h2>
+<pre>
+running 4 tests
+test grid::tests::cell_write_sets_dirty_flag ... <span class="pass">ok</span>
+test grid::tests::clear_dirty_resets_all_flags ... <span class="pass">ok</span>
+test grid::tests::cursor_move_updates_position ... <span class="pass">ok</span>
+test grid::tests::grid_creation_has_correct_dimensions ... <span class="pass">ok</span>
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+</pre>
+
+</body>
+</html>

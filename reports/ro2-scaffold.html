@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RO2 Scaffold Report — Gunter Terminal v0.1.0</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+    background: #282c34;
+    color: #abb2bf;
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 0 24px;
+    line-height: 1.6;
+  }
+  h1 { color: #61afef; border-bottom: 2px solid #3e4451; padding-bottom: 8px; }
+  h2 { color: #98c379; margin-top: 32px; }
+  h3 { color: #e5c07b; }
+  code, pre {
+    background: #1e2127;
+    border-radius: 4px;
+    font-family: "ComicShannsMono Nerd Font Mono", "Cascadia Code", monospace;
+  }
+  code { padding: 2px 6px; color: #e06c75; }
+  pre {
+    padding: 16px;
+    overflow-x: auto;
+    border-left: 3px solid #528bff;
+    color: #abb2bf;
+  }
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    font-weight: bold;
+    margin: 2px;
+  }
+  .green { background: #2d4a2d; color: #98c379; border: 1px solid #98c379; }
+  .blue  { background: #1e3a4a; color: #61afef; border: 1px solid #61afef; }
+  .yellow { background: #4a3c1e; color: #e5c07b; border: 1px solid #e5c07b; }
+  .red  { background: #4a2020; color: #e06c75; border: 1px solid #e06c75; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+  }
+  th { background: #3e4451; color: #61afef; padding: 8px 12px; text-align: left; }
+  td { padding: 8px 12px; border-bottom: 1px solid #3e4451; }
+  tr:hover td { background: #2c313a; }
+  .checklist li { list-style: none; padding: 4px 0; }
+  .checklist li::before { content: "✓ "; color: #98c379; }
+  .section { margin-bottom: 32px; }
+  .commit-box {
+    background: #1e2127;
+    border: 1px solid #528bff;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 16px 0;
+  }
+  .commit-sha { font-family: monospace; color: #c678dd; font-size: 1.1em; }
+</style>
+</head>
+<body>
+
+<h1>RO2 Scaffold Report — Gunter Terminal v0.1.0</h1>
+
+<div class="section">
+  <span class="badge green">cargo check: PASS</span>
+  <span class="badge blue">TDD: scaffold validation complete</span>
+  <span class="badge yellow">Phase: v0.1 Foundation</span>
+</div>
+
+<div class="commit-box">
+  <strong>Commit:</strong> <span class="commit-sha">e0fba58</span><br>
+  <strong>Branch:</strong> <code>feat/v0.1-scaffold</code><br>
+  <strong>Remote:</strong> <code>origin/feat/v0.1-scaffold</code> (pushed)<br>
+  <strong>Message:</strong> feat: scaffold Cargo workspace + crate skeletons for v0.1.0
+</div>
+
+<h2>Workspace Structure Chosen</h2>
+
+<pre>gunter-wt-scaffold/
+├── Cargo.toml                  # workspace root (resolver = "2")
+├── Cargo.lock                  # locked deps
+├── crates/
+│   ├── gunter-core/            # lib — PTY mgmt, grid types, config
+│   ├── gunter-renderer/        # lib — wgpu stub (no GPU deps yet)
+│   ├── gunter-term/            # lib — vte parser → grid state
+│   ├── gunter-input/           # lib — keyboard/mouse stub
+│   └── gunter-app/             # bin — main binary entry point
+├── config/
+│   └── default.toml            # default shell/font/key config
+└── assets/
+    └── themes/
+        └── atom-one-dark.toml  # Atom One Dark color palette</pre>
+
+<h3>Why this structure?</h3>
+<p>
+  The <code>crates/</code> subdirectory convention places all workspace members under a single directory,
+  matching the SPEC.md layout exactly. This avoids top-level clutter as the codebase grows and makes
+  <code>members = ["crates/*"]</code> glob-expansion trivial if needed later.
+</p>
+
+<h2>workspace.dependencies Pattern</h2>
+<p>
+  All shared external dependencies are declared once in <code>[workspace.dependencies]</code> in the
+  workspace root <code>Cargo.toml</code>. Individual crates inherit them with <code>{ workspace = true }</code>.
+  This enforces a single version of every shared dep across all crates — no version skew, no duplicate
+  resolution conflicts when adding crates that both use e.g. <code>serde</code>.
+</p>
+
+<table>
+  <tr>
+    <th>Dependency</th>
+    <th>Version</th>
+    <th>Used by</th>
+    <th>Notes</th>
+  </tr>
+  <tr><td><code>vte</code></td><td>0.13</td><td>gunter-term</td><td>Zero-alloc VT/ANSI parser</td></tr>
+  <tr><td><code>portable-pty</code></td><td>0.8</td><td>gunter-app</td><td>PTY on Windows/Linux/macOS</td></tr>
+  <tr><td><code>tokio</code></td><td>1 (full)</td><td>gunter-app</td><td>Async runtime + mpsc channels</td></tr>
+  <tr><td><code>uuid</code></td><td>1 (v4)</td><td>gunter-core</td><td>Session IDs</td></tr>
+  <tr><td><code>serde</code></td><td>1 (derive)</td><td>gunter-core</td><td>Config deserialization</td></tr>
+  <tr><td><code>toml</code></td><td>0.8</td><td>(future)</td><td>Config file parsing — declared, not yet consumed</td></tr>
+</table>
+
+<h2>TDD Approach: cargo check as Test Gate</h2>
+
+<p>
+  For a scaffold task, compilation is the test. The workflow was:
+</p>
+
+<ol>
+  <li>Write workspace <code>Cargo.toml</code> first (no crates exist)</li>
+  <li>Run <code>cargo check</code> — expected failure: <em>"failed to read crates/gunter-core/Cargo.toml: No such file or directory"</em></li>
+  <li>Create each crate directory, <code>Cargo.toml</code>, and stub <code>src/lib.rs</code> (or <code>main.rs</code>)</li>
+  <li>Run <code>cargo check</code> again — all 5 crates checked green: <strong>Finished dev profile in 15.03s</strong></li>
+</ol>
+
+<pre>$ cargo check
+    Checking gunter-renderer v0.1.0
+    Checking gunter-input v0.1.0
+    Checking gunter-core v0.1.0
+    Checking gunter-term v0.1.0
+    Checking gunter-app v0.1.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.03s</pre>
+
+<h2>What is NOT in Scope (Deferred to v0.2)</h2>
+
+<ul class="checklist">
+  <li style="list-style:none"><span style="color:#e06c75">✗</span> <code>wgpu</code> — GPU rendering library (high compile cost, not needed for Phase 1)</li>
+  <li style="list-style:none"><span style="color:#e06c75">✗</span> <code>winit</code> — OS window + event loop (Phase 2)</li>
+  <li style="list-style:none"><span style="color:#e06c75">✗</span> <code>wezterm-font</code> — glyph atlas / font rasterization (Phase 2)</li>
+  <li style="list-style:none"><span style="color:#e06c75">✗</span> <code>notify</code> — config hot-reload (Phase 5)</li>
+  <li style="list-style:none"><span style="color:#e06c75">✗</span> <code>clap</code> — CLI arg parsing (Phase 4)</li>
+</ul>
+
+<p>
+  <code>gunter-renderer</code> crate is scaffolded with an empty <code>[dependencies]</code> section.
+  When GPU work begins in v0.2, <code>wgpu</code> and <code>winit</code> will be added to
+  <code>[workspace.dependencies]</code> and inherited by <code>gunter-renderer</code> and
+  <code>gunter-app</code> without touching any other crate's <code>Cargo.toml</code>.
+</p>
+
+<h2>What Reviewer Should Check</h2>
+
+<table>
+  <tr><th>Item</th><th>Expected</th><th>Location</th></tr>
+  <tr>
+    <td><code>edition = "2021"</code></td>
+    <td>Present in every crate Cargo.toml</td>
+    <td>All 5 <code>crates/*/Cargo.toml</code></td>
+  </tr>
+  <tr>
+    <td><code>resolver = "2"</code></td>
+    <td>Present in workspace root only</td>
+    <td><code>Cargo.toml</code> (root)</td>
+  </tr>
+  <tr>
+    <td>Workspace dep inheritance</td>
+    <td><code>{ workspace = true }</code> — no version duplication in crates</td>
+    <td>All crate Cargo.tomls</td>
+  </tr>
+  <tr>
+    <td>Path deps</td>
+    <td><code>gunter-term</code> depends on <code>gunter-core</code> via path, not version</td>
+    <td><code>crates/gunter-term/Cargo.toml</code></td>
+  </tr>
+  <tr>
+    <td>Binary target</td>
+    <td><code>gunter-app</code> has <code>[[bin]]</code> section with name <code>gunter</code></td>
+    <td><code>crates/gunter-app/Cargo.toml</code></td>
+  </tr>
+  <tr>
+    <td>Stub sources</td>
+    <td>Each lib crate: single-line comment only. App: prints version string.</td>
+    <td><code>crates/*/src/lib.rs</code>, <code>crates/gunter-app/src/main.rs</code></td>
+  </tr>
+</table>
+
+<h2>Notable Decisions</h2>
+
+<h3>crates/ subdirectory matches SPEC layout exactly</h3>
+<p>
+  The SPEC.md specifies <code>gunter/crates/...</code>. Using the same directory name means any
+  future engineer reading the spec can find the crates exactly where expected. No creative remapping.
+</p>
+
+<h3>gunter-renderer has empty [dependencies]</h3>
+<p>
+  Rather than omitting the <code>[dependencies]</code> section entirely, an explicit empty section
+  is included. This signals intent: the crate exists as a placeholder and will grow, rather than
+  accidentally being treated as dead code.
+</p>
+
+<h3>Cargo.lock committed</h3>
+<p>
+  For a binary crate (<code>gunter-app</code>), Cargo.lock should be committed. This is the correct
+  default for applications (vs. libraries). Reproducible builds are important here since this targets
+  a specific PTY + VTE version combination on WSL.
+</p>
+
+<h3>toml declared but not yet consumed</h3>
+<p>
+  <code>toml = "0.8"</code> is in <code>[workspace.dependencies]</code> but no crate declares
+  <code>toml = { workspace = true }</code> yet. It is pre-declared because config parsing
+  (<code>gunter-core</code>) is the next task. This avoids a future PR that only touches the
+  workspace root to add a dep.
+</p>
+
+<hr style="border-color: #3e4451; margin: 32px 0;">
+<p style="color: #4f5666; font-size: 0.85em;">
+  Generated by GentleCrane (claude-code / claude-sonnet-4-6) &mdash; 2026-05-25 &mdash; gunter-terminal ro2
+</p>
+
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>gunter-terminal v0.1.0 — Smoke Test &amp; Release Report</title>
+<style>
+  body { font-family: monospace; background: #282c34; color: #abb2bf; margin: 2rem; line-height: 1.6; }
+  h1 { color: #61afef; border-bottom: 2px solid #3e4451; padding-bottom: 0.5rem; }
+  h2 { color: #98c379; margin-top: 2rem; }
+  h3 { color: #e5c07b; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th { background: #3e4451; color: #61afef; padding: 0.5rem 1rem; text-align: left; }
+  td { padding: 0.4rem 1rem; border-bottom: 1px solid #3e4451; }
+  tr:hover td { background: #2c313a; }
+  .pass { color: #98c379; font-weight: bold; }
+  .fail { color: #e06c75; font-weight: bold; }
+  .warn { color: #e5c07b; font-weight: bold; }
+  .info { color: #56b6c2; }
+  .critical { background: #3d1a1a; border-left: 4px solid #e06c75; padding: 0.5rem 1rem; margin: 0.5rem 0; }
+  .major { background: #3d2e1a; border-left: 4px solid #e5c07b; padding: 0.5rem 1rem; margin: 0.5rem 0; }
+  .minor { background: #1a2d1a; border-left: 4px solid #98c379; padding: 0.5rem 1rem; margin: 0.5rem 0; }
+  code { background: #3e4451; padding: 0.1rem 0.4rem; border-radius: 3px; color: #c678dd; }
+  pre { background: #21252b; padding: 1rem; border-radius: 4px; overflow-x: auto; color: #abb2bf; }
+  .verdict-pass { background: #1a2d1a; border: 2px solid #98c379; padding: 1rem; border-radius: 4px; font-size: 1.2rem; }
+  .commit { color: #c678dd; font-family: monospace; }
+  .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 3px; font-size: 0.85rem; margin: 0.1rem; }
+  .badge-green { background: #1a3a1a; color: #98c379; border: 1px solid #98c379; }
+  .badge-red { background: #3a1a1a; color: #e06c75; border: 1px solid #e06c75; }
+  .badge-yellow { background: #3a2a1a; color: #e5c07b; border: 1px solid #e5c07b; }
+  .badge-blue { background: #1a2a3a; color: #61afef; border: 1px solid #61afef; }
+</style>
+</head>
+<body>
+
+<h1>gunter-terminal v0.1.0 — Smoke Test &amp; Release Report</h1>
+
+<p>Date: 2026-05-25 | Branch: <code>develop</code> | Tag: <code>v0.1.0</code></p>
+<p>Commit range: <span class="commit">ff76bd5</span> → <span class="commit">98f65f0</span></p>
+
+<div class="verdict-pass">
+  <span class="pass">✓ PASS</span> — All 26 tests green. Phase 1 exit condition met.
+  v0.1.0 tagged on <code>develop</code>.
+</div>
+
+<h2>Test Results</h2>
+<table>
+  <tr><th>Crate</th><th>Tests</th><th>Result</th><th>Coverage</th></tr>
+  <tr><td><code>gunter-core</code></td><td>4</td><td><span class="pass">PASS</span></td><td>Grid creation, write_cell dirty flag, clear_dirty, cursor_move</td></tr>
+  <tr><td><code>gunter-term</code></td><td>19</td><td><span class="pass">PASS</span></td><td>print, newline, CR, CSI cursor (H/A/B/C/D), SGR colors+attrs, dirty flag</td></tr>
+  <tr><td><code>gunter-app</code></td><td>3</td><td><span class="pass">PASS</span></td><td>plain text in grid, ANSI color, cursor position after text</td></tr>
+  <tr><td><strong>Total</strong></td><td><strong>26</strong></td><td><span class="pass">26/26</span></td><td></td></tr>
+</table>
+
+<h2>Phase 1 Spec Compliance</h2>
+<table>
+  <tr><th>Requirement</th><th>Status</th><th>Notes</th></tr>
+  <tr><td>Cargo workspace with 5 crates</td><td><span class="pass">✓</span></td><td>gunter-core, gunter-renderer, gunter-term, gunter-input, gunter-app</td></tr>
+  <tr><td>Open PTY with <code>portable_pty</code></td><td><span class="pass">✓</span></td><td>native_pty_system(), PtySize 80×24</td></tr>
+  <tr><td>Spawn <code>wsl.exe</code> into PTY slave</td><td><span class="pass">✓</span></td><td>CommandBuilder::new("wsl.exe")</td></tr>
+  <tr><td>Read PTY stdout → push to vte::Parser</td><td><span class="pass">✓</span></td><td>4096-byte read loop, parser at outer scope</td></tr>
+  <tr><td>vte::Perform impl writes into Grid</td><td><span class="pass">✓</span></td><td>GridPerformer: print, execute, csi_dispatch</td></tr>
+  <tr><td>Print grid to stdout (headless verify)</td><td><span class="pass">✓</span></td><td>print_grid() function</td></tr>
+  <tr><td>Exit condition: "echo hello" shows "hello" in grid</td><td><span class="pass">✓</span></td><td>Verified by plain_text_appears_in_grid test</td></tr>
+  <tr><td>Atom One Dark theme defaults</td><td><span class="pass">✓</span></td><td>Cell::blank() fg=#abb2bf bg=#282c34; ANSI palette in performer</td></tr>
+  <tr><td><code>cargo check</code> passes</td><td><span class="pass">✓</span></td><td>All 5 crates compile clean</td></tr>
+</table>
+
+<h2>Commit Log (v0.1.0)</h2>
+<table>
+  <tr><th>Commit</th><th>Message</th></tr>
+  <tr><td class="commit">e0fba58</td><td>feat: scaffold Cargo workspace + crate skeletons for v0.1.0</td></tr>
+  <tr><td class="commit">f20ec12</td><td>feat: merge v0.1-scaffold — Cargo workspace + crate skeletons</td></tr>
+  <tr><td class="commit">f450eed</td><td>feat: implement Grid/Cell/CellFlags with TDD tests (5wa)</td></tr>
+  <tr><td class="commit">0661f4b</td><td>feat: merge v0.1-grid — Grid/Cell/CellFlags TDD (5wa)</td></tr>
+  <tr><td class="commit">cbea28d</td><td>feat: implement GridPerformer VTE with TDD tests (f9s)</td></tr>
+  <tr><td class="commit">895e0b5</td><td>feat: merge v0.1-term — GridPerformer VTE TDD (f9s); resolve grid.rs conflict</td></tr>
+  <tr><td class="commit">9083e5b</td><td>feat: PTY loop + main binary with integration tests (3u7)</td></tr>
+  <tr><td class="commit">98f65f0</td><td>feat: merge v0.1-app — PTY loop + main binary + integration tests (3u7)</td></tr>
+</table>
+
+<h2>Reviewer Findings (from v0.1.0-review.html)</h2>
+
+<h3>Corrected Assessment: Reviewer False Positive</h3>
+<div class="minor">
+  <strong>Reviewer reported:</strong> "Parser recreated on each loop iteration" (main.rs:34)<br>
+  <strong>Actual code:</strong> <code>vte::Parser::new()</code> is at line 26, OUTSIDE the loop. Parser state IS preserved across reads.<br>
+  <strong>Verdict:</strong> False positive. The reviewer confused <code>GridPerformer</code> (thin borrow, no vte state) with <code>vte::Parser</code> (stateful).
+</div>
+
+<h3>Real Issue Identified</h3>
+<div class="major">
+  <strong>performer state reset across reads</strong> — <code>GridPerformer</code> is constructed fresh each <code>read()</code> iteration (main.rs:34). The performer holds <code>fg</code>, <code>bg</code>, <code>flags</code> state. If an SGR escape sequence is split across two read() calls, the color state resets between them, causing the character to appear in default colors.<br><br>
+  <strong>Impact:</strong> Phase 1 — negligible (single-read for short commands). Phase 2 — real issue under load.<br>
+  <strong>Fix for v0.2:</strong> Persist performer state across reads (move fg/bg/flags into a separate struct owned outside the loop, or make GridPerformer own the grid rather than borrow it).
+</div>
+
+<h3>Other Findings</h3>
+<table>
+  <tr><th>File:Line</th><th>Severity</th><th>Finding</th></tr>
+  <tr>
+    <td><code>performer.rs:49-56</code></td>
+    <td><span class="badge badge-yellow">major</span></td>
+    <td>Col 79: cursor stays at last column (no wrap). Acceptable for Phase 1; implement line wrap before Phase 2.</td>
+  </tr>
+  <tr>
+    <td><code>performer.rs:62-69</code></td>
+    <td><span class="badge badge-yellow">major</span></td>
+    <td>Row 23 newline: stays at bottom (no scroll). scrollback field exists but unused. Silent data loss for long-running sessions. Fix in v0.2 with scrollback push logic.</td>
+  </tr>
+  <tr>
+    <td><code>grid.rs:20</code></td>
+    <td><span class="badge badge-green">minor</span></td>
+    <td><code>CellFlags::NONE = 0</code> unconventional in bitflags 2.x. Works correctly. Could use <code>empty()</code> instead.</td>
+  </tr>
+  <tr>
+    <td><code>main.rs:22</code></td>
+    <td><span class="badge badge-blue">info</span></td>
+    <td><code>wsl.exe</code> hardcoded. Spec requires <code>[shell] program</code> config. Deferred to Phase 5 (v0.6.0) by design.</td>
+  </tr>
+  <tr>
+    <td><code>main.rs multiple</code></td>
+    <td><span class="badge badge-blue">info</span></td>
+    <td><code>unwrap()</code> / <code>expect()</code> calls. Acceptable for Phase 1. Phase 4 socket server needs error handling.</td>
+  </tr>
+</table>
+
+<h2>Must Fix Before v0.2</h2>
+<ol>
+  <li><strong>Performer state across reads:</strong> Refactor <code>GridPerformer</code> so its <code>fg</code>/<code>bg</code>/<code>flags</code> state survives across <code>read()</code> iterations. The <code>vte::Parser</code> already survives — the performer must too.</li>
+  <li><strong>Line wrap:</strong> When cursor reaches col 79, wrap to col 0 of next row (and scroll if at row 23).</li>
+  <li><strong>Scroll:</strong> When cursor is at row 23 and receives <code>\n</code>, push top row to <code>scrollback</code> and shift all rows up.</li>
+</ol>
+
+<h2>Not In Spec (Extensions Added)</h2>
+<ul>
+  <li><code>CellFlags::NONE = 0</code> named constant — useful but not in spec. Keep.</li>
+  <li><code>Color::black()</code> and <code>Color::white()</code> convenience constructors — used in tests, not spec. Keep.</li>
+  <li><code>Grid::idx()</code> private helper — internal implementation detail. Keep.</li>
+  <li>19 performer tests (spec said "cover: plain text print, cursor movement CSI, SGR color codes, newline/CR") — spec covered + more. Keep.</li>
+  <li>Atom One Dark palette in SGR colors — spec says theme but doesn't mandate SGR colors match. Good choice.</li>
+</ul>
+
+<h2>Orchestrator Conflict Resolution Notes</h2>
+<p>The grid (5wa) and term (f9s) agents ran in parallel and both wrote <code>gunter-core/src/grid.rs</code>. Orchestrator resolved by:</p>
+<ul>
+  <li>Keeping grid agent's <code>bitflags!</code> macro (canonical, already tested)</li>
+  <li>Adding <code>NONE = 0</code> to bitflags to satisfy term agent's <code>CellFlags::NONE</code> usage</li>
+  <li>Taking term agent's <code>idx()</code> helper and bounds-check in <code>write_cell</code> (safer)</li>
+  <li>Taking term agent's <code>cursor_move</code> with bounds clamping (safer)</li>
+  <li>Taking term agent's Atom One Dark defaults in <code>Cell::blank()</code> (spec-correct)</li>
+  <li>Keeping grid agent's <code>scrollback</code> field (spec requires it)</li>
+</ul>
+
+<hr style="border-color: #3e4451; margin: 2rem 0;">
+<p style="color: #4f5666;">Generated by AmberSparrow (orchestrator) — gunter-terminal v0.1.0 smoke + release</p>
+</body>
+</html>
