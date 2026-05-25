@@ -1,0 +1,28 @@
+# ~/.config/gunter/config.toml
+
+[shell]
+program = "wsl.exe"
+args    = []
+# For a specific distro:
+# args = ["--distribution", "Ubuntu-22.04"]
+
+[font]
+family      = "ComicShannsMono Nerd Font Mono"
+fallback    = []
+size        = 14.0
+line_height = 1.2
+
+[theme]
+name = "atom-one-dark"
+
+[scrollback]
+lines = 5000
+
+[keys]
+new_tab    = "Ctrl+Shift+T"
+close_tab  = "Ctrl+Shift+W"
+split_h    = "Ctrl+Shift+H"
+split_v    = "Ctrl+Shift+V"
+next_pane  = "Ctrl+Tab"
+prev_pane  = "Ctrl+Shift+Tab"
+zoom_pane  = "Ctrl+Z"

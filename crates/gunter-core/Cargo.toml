@@ -1,0 +1,8 @@
+[package]
+name = "gunter-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+uuid = { workspace = true }
+serde = { workspace = true }

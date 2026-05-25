@@ -1,0 +1,14 @@
+[package]
+name = "gunter-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gunter"
+path = "src/main.rs"
+
+[dependencies]
+gunter-core = { path = "../gunter-core" }
+gunter-term = { path = "../gunter-term" }
+portable-pty = { workspace = true }
+tokio = { workspace = true }
