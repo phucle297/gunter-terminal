@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3u7 — PTY Loop + Main Binary TDD Report</title>
+  <style>
+    body { font-family: monospace; background: #282c34; color: #abb2bf; margin: 2rem; line-height: 1.6; }
+    h1 { color: #61afef; }
+    h2 { color: #e5c07b; border-bottom: 1px solid #3f4451; padding-bottom: 0.3rem; }
+    code, pre { background: #3f4451; padding: 0.1rem 0.3rem; border-radius: 3px; color: #98c379; }
+    pre { display: block; padding: 1rem; overflow-x: auto; }
+    .pass { color: #98c379; }
+    .fail { color: #e06c75; }
+    .note { color: #c678dd; }
+    table { border-collapse: collapse; width: 100%; }
+    th { color: #61afef; text-align: left; padding: 0.5rem; border-bottom: 1px solid #3f4451; }
+    td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #3f4451; }
+    .tag { background: #3f4451; border-radius: 3px; padding: 0.1rem 0.4rem; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+
+<h1>gunter-terminal 3u7 — PTY Loop + Main Binary TDD Report</h1>
+
+<h2>Summary</h2>
+<table>
+  <tr><th>Field</th><th>Value</th></tr>
+  <tr><td>Issue</td><td>gunter-terminal-3u7</td></tr>
+  <tr><td>Branch</td><td>feat/v0.1-app</td></tr>
+  <tr><td>Commit</td><td><code>9083e5b19b347a40192123403bc69f5d9f232574</code></td></tr>
+  <tr><td>Agent</td><td>CrimsonForge (claude-sonnet-4-6)</td></tr>
+  <tr><td>Date</td><td>2026-05-25</td></tr>
+  <tr><td>Test result</td><td class="pass">cargo test --workspace: 26 passed, 0 failed</td></tr>
+</table>
+
+<h2>Why portable-pty</h2>
+<p>
+  <code>portable-pty</code> abstracts over two very different PTY subsystems with a single Rust API:
+</p>
+<ul>
+  <li><strong>Linux/macOS</strong>: POSIX <code>openpty(3)</code> / <code>forkpty(3)</code></li>
+  <li><strong>Windows</strong>: ConPTY (pseudo-console API added in Windows 10 1809)</li>
+</ul>
+<p>
+  gunter-terminal targets both Linux and Windows (via WSL2). Using portable-pty means the same
+  <code>PtySize</code>, <code>CommandBuilder</code>, and reader/writer API compiles on both hosts.
+  No <code>#[cfg(target_os = ...)]</code> branching needed in application code.
+</p>
+
+<h2>TDD Sequence</h2>
+<h3>Step 1 — Red (tests written before Cargo.toml fix)</h3>
+<p>Tests written into <code>gunter-app/src/main.rs</code> referencing <code>vte::Parser</code>
+and <code>gunter_term::performer::GridPerformer</code>. Running
+<code>cargo test -p gunter-app</code> produced:</p>
+<pre class="fail">error[E0433]: cannot find module or crate `vte` in this scope
+  --&gt; crates/gunter-app/src/main.rs:26:22
+     = help: if you wanted to use a crate named `vte`, use `cargo add vte` to add it</pre>
+<p>The error was expected — <code>vte</code> was in the workspace but not declared as a dependency
+of <code>gunter-app</code>. This confirmed the red phase.</p>
+
+<h3>Step 2 — Fix Cargo.toml</h3>
+<p>Added <code>vte = { workspace = true }</code> to
+<code>crates/gunter-app/Cargo.toml</code> <code>[dependencies]</code>. No version pinning needed
+since the workspace already declares <code>vte = "0.13"</code>.</p>
+
+<h3>Step 3 — Green</h3>
+<p>After the Cargo.toml fix, all 3 new integration tests passed immediately:</p>
+<pre class="pass">running 3 tests
+test tests::ansi_colors_applied_in_grid ... ok
+test tests::cursor_position_after_text ... ok
+test tests::plain_text_appears_in_grid ... ok
+
+test result: ok. 3 passed; 0 failed</pre>
+
+<h3>Step 4 — Full workspace</h3>
+<pre class="pass">gunter-app:     3 passed
+gunter-core:    4 passed
+gunter-term:   19 passed
+gunter-input:   0 (stub)
+gunter-renderer: 0 (stub)
+---
+Total: 26 passed, 0 failed</pre>
+
+<h2>What Is NOT in Scope (Phase 1)</h2>
+<ul>
+  <li><span class="tag">out-of-scope</span> <strong>tokio async runtime</strong> — blocking
+    <code>reader.read()</code> is sufficient for Phase 1 headless verification. Async will be
+    needed when the event loop must service both PTY I/O and UI events simultaneously (Phase 2).</li>
+  <li><span class="tag">out-of-scope</span> <strong>winit window</strong> — Phase 2 opens a
+    native window via winit and drives a render loop.</li>
+  <li><span class="tag">out-of-scope</span> <strong>GPU / wgpu renderer</strong> — Phase 2
+    adds a wgpu-based glyph renderer. Phase 1 uses <code>print_grid()</code> stdout dump only.</li>
+  <li><span class="tag">out-of-scope</span> <strong>scrollback rendering</strong> — Grid stores
+    a <code>VecDeque&lt;Vec&lt;Cell&gt;&gt;</code> scrollback but it is not exposed yet.</li>
+</ul>
+
+<h2>What Reviewer Should Check</h2>
+<dl>
+  <dt>GridPerformer lifetime (borrow safety)</dt>
+  <dd>
+    In the PTY read loop, <code>GridPerformer::new(&amp;mut grid)</code> creates a performer that
+    mutably borrows <code>grid</code> for the duration of that loop iteration. The performer is
+    dropped at the end of the <code>Ok(n)</code> match arm, before the next <code>reader.read()</code>
+    call. Rust's borrow checker enforces this — the code would not compile otherwise. Safe.
+  </dd>
+  <dt>wsl.exe in PATH assumption</dt>
+  <dd>
+    The <code>main()</code> function calls <code>CommandBuilder::new("wsl.exe")</code>.
+    This assumes WSL2 is installed and <code>wsl.exe</code> is on <code>PATH</code>.
+    On a Linux host without WSL, <code>spawn_command</code> will panic with "spawn failed".
+    For cross-platform headless CI, the spawn should be guarded or the binary should accept
+    the shell path as a CLI argument (future work).
+  </dd>
+  <dt>print_grid is a headless verification tool</dt>
+  <dd>
+    <code>print_grid()</code> writes raw character grid to stdout. It is not the final renderer.
+    Its purpose is to let a developer observe PTY output state without a GUI window. It will be
+    replaced by the wgpu renderer in Phase 2.
+  </dd>
+</dl>
+
+<h2>Files Changed</h2>
+<ul>
+  <li><code>crates/gunter-app/src/main.rs</code> — PTY loop, print_grid, 3 integration tests</li>
+  <li><code>crates/gunter-app/Cargo.toml</code> — added <code>vte = { workspace = true }</code></li>
+  <li><code>Cargo.lock</code> — updated (no new external crates, vte was already in workspace)</li>
+</ul>
+
+</body>
+</html>
