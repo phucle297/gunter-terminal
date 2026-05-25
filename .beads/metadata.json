@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "gunter_terminal",
+  "project_id": "0061565d-510b-43be-91cf-75ac255f8133"
+}
