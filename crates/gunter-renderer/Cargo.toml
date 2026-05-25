@@ -1,6 +1,13 @@
 [package]
 name = "gunter-renderer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
+gunter-core = { path = "../gunter-core" }
+wgpu = { workspace = true }
+winit = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+fontdue = { workspace = true }
+env_logger = { workspace = true }
