@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gunter Terminal — Planning Progress</title>
+    <style>
+      :root {
+        --bg: #edf2f7;
+        --bg2: #ffffff;
+        --bg3: #dde5ee;
+
+        --fg: #111827;
+        --fg-dim: #4b5563;
+
+        --border: #b8c2cf;
+
+        --blue: #1d4ed8;
+        --green: #15803d;
+        --yellow: #a16207;
+        --red: #b91c1c;
+        --magenta: #7e22ce;
+        --cyan: #0f766e;
+
+        --cursor: #1d4ed8;
+
+        --mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg3);
+        color: var(--fg);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      /* Layout */
+      .layout {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        min-height: 100vh;
+      }
+      .sidebar {
+        background: var(--bg2);
+        border-right: 1px solid var(--border);
+        padding: 24px 0;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+      }
+      .main {
+        padding: 40px 48px;
+        max-width: 960px;
+      }
+
+      /* Sidebar */
+      .sidebar-logo {
+        padding: 0 20px 24px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 16px;
+      }
+      .sidebar-logo h1 {
+        font-family: var(--mono);
+        font-size: 18px;
+        color: var(--blue);
+        letter-spacing: -0.5px;
+      }
+      .sidebar-logo p {
+        font-size: 11px;
+        color: var(--fg-dim);
+        margin-top: 2px;
+      }
+      .sidebar-nav {
+        list-style: none;
+      }
+      .sidebar-nav li a {
+        display: block;
+        padding: 6px 20px;
+        color: var(--fg-dim);
+        text-decoration: none;
+        font-size: 13px;
+        transition:
+          color 0.15s,
+          background 0.15s;
+      }
+      .sidebar-nav li a:hover {
+        color: var(--fg);
+        background: var(--bg);
+      }
+      .sidebar-nav li a.active {
+        color: var(--blue);
+        background: rgba(97, 175, 239, 0.08);
+        border-left: 2px solid var(--blue);
+        padding-left: 18px;
+      }
+      .sidebar-section {
+        padding: 12px 20px 4px;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        color: var(--fg-dim);
+      }
+
+      /* Header */
+      .page-header {
+        margin-bottom: 40px;
+        padding-bottom: 24px;
+        border-bottom: 1px solid var(--border);
+      }
+      .page-header h2 {
+        font-size: 24px;
+        font-weight: 600;
+        color: var(--fg);
+        margin-bottom: 4px;
+      }
+      .page-header p {
+        color: var(--fg-dim);
+        font-size: 13px;
+      }
+      .updated {
+        font-size: 11px;
+        color: var(--fg-dim);
+        margin-top: 8px;
+      }
+      .updated span {
+        color: var(--yellow);
+      }
+
+      /* Status badge */
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 8px;
+        border-radius: 3px;
+        font-size: 11px;
+        font-weight: 600;
+        font-family: var(--mono);
+      }
+      .badge-done {
+        background: rgba(152, 195, 121, 0.15);
+        color: var(--green);
+        border: 1px solid rgba(152, 195, 121, 0.3);
+      }
+      .badge-wip {
+        background: rgba(229, 192, 123, 0.15);
+        color: var(--yellow);
+        border: 1px solid rgba(229, 192, 123, 0.3);
+      }
+      .badge-todo {
+        background: rgba(92, 99, 112, 0.2);
+        color: var(--fg-dim);
+        border: 1px solid var(--border);
+      }
+      .badge-blocked {
+        background: rgba(224, 108, 117, 0.15);
+        color: var(--red);
+        border: 1px solid rgba(224, 108, 117, 0.3);
+      }
+
+      /* Cards */
+      .card {
+        background: var(--bg2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+      .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+      .card-title {
+        font-family: var(--mono);
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .card-sub {
+        font-size: 12px;
+        color: var(--fg-dim);
+        margin-top: 2px;
+      }
+
+      /* Phase table */
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 24px;
+      }
+      th {
+        text-align: left;
+        padding: 8px 12px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--fg-dim);
+        border-bottom: 1px solid var(--border);
+        background: var(--bg3);
+      }
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(62, 68, 81, 0.5);
+        font-size: 13px;
+        vertical-align: top;
+      }
+      tr:last-child td {
+        border-bottom: none;
+      }
+      tr:hover td {
+        background: rgba(255, 255, 255, 0.02);
+      }
+      td.mono {
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      td.dim {
+        color: var(--fg-dim);
+      }
+
+      /* Progress bar */
+      .progress-wrap {
+        margin-bottom: 32px;
+      }
+      .progress-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: var(--fg-dim);
+        margin-bottom: 6px;
+      }
+      .progress-bar {
+        height: 6px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, var(--blue), var(--cyan));
+        border-radius: 3px;
+        transition: width 0.5s ease;
+      }
+
+      /* Decision list */
+      .decision-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .decision-item {
+        background: var(--bg3);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 12px 14px;
+      }
+      .decision-item .label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        color: var(--fg-dim);
+        margin-bottom: 4px;
+      }
+      .decision-item .value {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--cyan);
+      }
+      .decision-item .reason {
+        font-size: 11px;
+        color: var(--fg-dim);
+        margin-top: 4px;
+        line-height: 1.4;
+      }
+
+      /* Keybind table */
+      .keybind-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 7px 0;
+        border-bottom: 1px solid rgba(62, 68, 81, 0.4);
+      }
+      .keybind-row:last-child {
+        border-bottom: none;
+      }
+      kbd {
+        background: var(--bg3);
+        border: 1px solid var(--border);
+        border-bottom-width: 2px;
+        border-radius: 3px;
+        padding: 2px 7px;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--yellow);
+        white-space: nowrap;
+      }
+      .keybind-action {
+        font-size: 12px;
+        color: var(--fg);
+        flex: 1;
+      }
+      .keybind-note {
+        font-size: 11px;
+        color: var(--fg-dim);
+      }
+
+      /* Versions timeline */
+      .timeline {
+        position: relative;
+        padding-left: 24px;
+      }
+      .timeline::before {
+        content: "";
+        position: absolute;
+        left: 7px;
+        top: 8px;
+        bottom: 8px;
+        width: 2px;
+        background: var(--border);
+      }
+      .timeline-item {
+        position: relative;
+        margin-bottom: 24px;
+      }
+      .timeline-dot {
+        position: absolute;
+        left: -21px;
+        top: 4px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 2px solid var(--border);
+        background: var(--bg3);
+      }
+      .timeline-dot.done {
+        background: var(--green);
+        border-color: var(--green);
+      }
+      .timeline-dot.wip {
+        background: var(--yellow);
+        border-color: var(--yellow);
+      }
+      .timeline-dot.todo {
+        background: var(--bg3);
+        border-color: var(--border);
+      }
+      .timeline-version {
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--blue);
+        margin-bottom: 2px;
+      }
+      .timeline-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--fg);
+        display: inline;
+        margin-left: 6px;
+      }
+      .timeline-desc {
+        font-size: 12px;
+        color: var(--fg-dim);
+        margin-top: 4px;
+        line-height: 1.5;
+      }
+      .timeline-crates {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .crate-tag {
+        font-family: var(--mono);
+        font-size: 10px;
+        background: rgba(97, 175, 239, 0.1);
+        color: var(--blue);
+        border: 1px solid rgba(97, 175, 239, 0.2);
+        border-radius: 3px;
+        padding: 1px 6px;
+      }
+
+      /* Section headers */
+      h3 {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--fg);
+        margin: 32px 0 16px;
+      }
+      h3:first-child {
+        margin-top: 0;
+      }
+      .section-intro {
+        font-size: 13px;
+        color: var(--fg-dim);
+        margin-bottom: 16px;
+        line-height: 1.6;
+      }
+
+      /* Tabs */
+      .tab-bar {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 24px;
+      }
+      .tab {
+        padding: 8px 16px;
+        font-size: 13px;
+        color: var(--fg-dim);
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        transition: color 0.15s;
+      }
+      .tab.active {
+        color: var(--blue);
+        border-bottom-color: var(--blue);
+      }
+      .tab:hover:not(.active) {
+        color: var(--fg);
+      }
+
+      /* Alerts */
+      .alert {
+        padding: 10px 14px;
+        border-radius: 4px;
+        font-size: 12px;
+        margin-bottom: 16px;
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .alert-warn {
+        background: rgba(229, 192, 123, 0.1);
+        border-left: 3px solid var(--yellow);
+        color: var(--fg);
+      }
+      .alert-info {
+        background: rgba(97, 175, 239, 0.1);
+        border-left: 3px solid var(--blue);
+        color: var(--fg);
+      }
+      .alert-icon {
+        font-size: 13px;
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-logo">
+          <h1>gunter</h1>
+          <p>Rust terminal emulator</p>
+        </div>
+        <div class="sidebar-section">Planning</div>
+        <ul class="sidebar-nav">
+          <li><a href="#overview" class="active">Overview</a></li>
+          <li><a href="#versions">Versions</a></li>
+          <li><a href="#decisions">Tech Decisions</a></li>
+          <li><a href="#keybinds">Keybindings</a></li>
+        </ul>
+        <div class="sidebar-section">Docs</div>
+        <ul class="sidebar-nav">
+          <li><a href="docs/01-overview.md">01 · Overview</a></li>
+          <li><a href="docs/02-renderer.md">02 · Renderer</a></li>
+          <li><a href="docs/03-core-pty.md">03 · Core / PTY</a></li>
+          <li><a href="docs/04-ux-config.md">04 · UX / Config</a></li>
+          <li>
+            <a href="docs/05-implementation-plan.md">05 · Impl Plan</a>
+          </li>
+        </ul>
+        <div class="sidebar-section">Source</div>
+        <ul class="sidebar-nav">
+          <li><a href="SPEC.md">SPEC.md</a></li>
+        </ul>
+      </aside>
+
+      <!-- Main content -->
+      <main class="main">
+        <!-- Header -->
+        <div class="page-header">
+          <h2>Gunter — Planning Progress</h2>
+          <p>
+            GPU-accelerated Rust terminal. Speed first. Inspired by kitty · tmux
+            · Hyper.
+          </p>
+          <div class="updated">
+            Last updated: <span>2026-05-25</span> &nbsp;·&nbsp; Planning phase:
+            <span>Active</span>
+          </div>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-wrap">
+          <div class="progress-label">
+            <span>Planning docs complete</span>
+            <span>5 / 5</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" style="width: 100%"></div>
+          </div>
+        </div>
+
+        <!-- Planning status -->
+        <h3 id="overview">Planning Documents</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Document</th>
+              <th>Status</th>
+              <th>Content</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="mono">docs/01-overview.md</td>
+              <td><span class="badge badge-done">✓ done</span></td>
+              <td class="dim">
+                Crate decision rationale, why-not-alternatives, scope boundary, success criteria
+              </td>
+            </tr>
+            <tr>
+              <td class="mono">docs/02-renderer.md</td>
+              <td><span class="badge badge-done">✓ done</span></td>
+              <td class="dim">
+                wgpu init, WGSL shaders, atlas gotchas, dirty-cell upload, ConPTY resize quirk
+              </td>
+            </tr>
+            <tr>
+              <td class="mono">docs/03-core-pty.md</td>
+              <td><span class="badge badge-done">✓ done</span></td>
+              <td class="dim">
+                PTY thread, vte edge cases, channel backpressure, dirty lifecycle, Windows/WSL quirks
+              </td>
+            </tr>
+            <tr>
+              <td class="mono">docs/04-ux-config.md</td>
+              <td><span class="badge badge-done">✓ done</span></td>
+              <td class="dim">
+                TOML rationale, hot-reload architecture, keybind decisions, rejected bindings
+              </td>
+            </tr>
+            <tr>
+              <td class="mono">docs/05-implementation-plan.md</td>
+              <td><span class="badge badge-done">✓ done</span></td>
+              <td class="dim">
+                Versioning strategy, sequencing rationale, cross-phase dependencies, session entry points
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Alert -->
+        <div class="alert alert-warn">
+          <span class="alert-icon">⚠</span>
+          <span
+            ><strong>Planning complete.</strong> All 5 docs written. Review
+            docs/05-implementation-plan.md, then begin v0.1.0
+            implementation.</span
+          >
+        </div>
+
+        <!-- Versions timeline -->
+        <h3 id="versions">Version Roadmap</h3>
+        <p class="section-intro">
+          7 versions from headless PTY to v1.0 public release. Each version is a
+          shippable demo milestone, not a task list.
+        </p>
+
+        <div class="timeline">
+          <div class="timeline-item">
+            <div class="timeline-dot todo"></div>
+            <div>
+              <span class="timeline-version">v0.1.0</span>
+              <span class="timeline-name">Headless PTY Shell</span>
+              <span style="margin-left: 8px"
+                ><span class="badge badge-todo">not started</span></span
+              >
+              <div class="timeline-desc">
+                PTY → VTE → Grid pipeline. No window. Print grid to stdout.
+                Validates that ANSI parsing and cell state work before any GPU
+                work.
+              </div>
+              <div class="timeline-crates">
+                <span class="crate-tag">gunter-core</span>
+                <span class="crate-tag">gunter-term</span>
+                <span class="crate-tag">gunter-app</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-item">
+            <div class="timeline-dot todo"></div>
+            <div>
+              <span class="timeline-version">v0.2.0</span>
+              <span class="timeline-name">GPU Window</span>
+              <span style="margin-left: 8px"
+                ><span class="badge badge-todo">not started</span></span
+              >
+              <div class="timeline-desc">
+                wgpu surface + winit window. Glyph atlas (wezterm-font). Render
+                single PTY pane at 60fps with Atom One Dark + ComicShannsMono.
+              </div>
+              <div class="timeline-crates">
+                <span class="crate-tag">gunter-renderer</span>
+                <span class="crate-tag">gunter-app</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-item">
+            <div class="timeline-dot todo"></div>
+            <div>
+              <span class="timeline-version">v0.3.0</span>
+              <span class="timeline-name">Interactive Terminal</span>
+              <span style="margin-left: 8px"
+                ><span class="badge badge-todo">not started</span></span
+              >
+              <div class="timeline-desc">
+                Full keyboard event → PTY write pipeline. Mouse click, resize
+                handling. Usable as a single-pane terminal.
+              </div>
+              <div class="timeline-crates">
+                <span class="crate-tag">gunter-input</span>
+                <span class="crate-tag">gunter-core</span>
+                <span class="crate-tag">gunter-app</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-item">
+            <div class="timeline-dot todo"></div>
+            <div>
+              <span class="timeline-version">v0.4.0</span>
+              <span class="timeline-name">Multiplexer</span>
+              <span style="margin-left: 8px"
+                ><span class="badge badge-todo">not started</span></span
+              >
+              <div class="timeline-desc">
+                Binary layout tree. Pane splits (Ctrl+Shift+H/V), tabs
+                (Ctrl+Shift+T/W), pane cycle (Ctrl+Tab), zoom (Ctrl+Z). Core
+                tmux-style UX.
+              </div>
+              <div class="timeline-crates">
+                <span class="crate-tag">gunter-core</span>
+                <span class="crate-tag">gunter-input</span>
+                <span class="crate-tag">gunter-renderer</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-item">
+            <div class="timeline-dot todo"></div>
+            <div>
+              <span class="timeline-version">v0.5.0</span>
+              <span class="timeline-name">Multi-Shell + Socket</span>
+              <span style="margin-left: 8px"
+                ><span class="badge badge-todo">not started</span></span
+              >
+              <div class="timeline-desc">
+                PowerShell, CMD, any shell via config. Unix socket / Windows
+                named pipe server. `gunter attach &lt;id&gt;` works.
+              </div>
+              <div class="timeline-crates">
+                <span class="crate-tag">gunter-core</span>
+                <span class="crate-tag">gunter-app</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-item">
+            <div class="timeline-dot todo"></div>
+            <div>
+              <span class="timeline-version">v0.6.0</span>
+              <span class="timeline-name">Config + Hot Reload</span>
+              <span style="margin-left: 8px"
+                ><span class="badge badge-todo">not started</span></span
+              >
+              <div class="timeline-desc">
+                Full TOML config at ~/.config/gunter/config.toml. notify-based
+                hot-reload. Theme system. Font fallback chain (Nerd Font, CJK,
+                emoji).
+              </div>
+              <div class="timeline-crates">
+                <span class="crate-tag">gunter-core</span>
+                <span class="crate-tag">gunter-app</span>
+                <span class="crate-tag">gunter-renderer</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timeline-item">
+            <div class="timeline-dot todo"></div>
+            <div>
+              <span class="timeline-version">v1.0.0</span>
+              <span class="timeline-name">Production Release</span>
+              <span style="margin-left: 8px"
+                ><span class="badge badge-todo">not started</span></span
+              >
+              <div class="timeline-desc">
+                Input latency &lt;10ms, throughput 100 MB/s. Scrollback UX,
+                copy/paste (OSC 52), full mouse support. Windows installer.
+                Public release.
+              </div>
+              <div class="timeline-crates">
+                <span class="crate-tag">all crates</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Key decisions -->
+        <h3 id="decisions">Key Technical Decisions</h3>
+        <p class="section-intro">
+          Each choice over its next-best alternative. Full rationale in linked
+          docs.
+        </p>
+
+        <div class="decision-grid">
+          <div class="decision-item">
+            <div class="label">GPU Backend</div>
+            <div class="value">wgpu</div>
+            <div class="reason">
+              DX12+Vulkan in one codebase. WSL2 GPU-PV compatible. Safe Rust
+              API. vs OpenGL (deprecated on macOS) and softbuffer (CPU-only).
+            </div>
+          </div>
+          <div class="decision-item">
+            <div class="label">VT Parser</div>
+            <div class="value">vte</div>
+            <div class="reason">
+              Zero-alloc. Same crate used by Alacritty. Zero runtime allocations
+              in the hot path. vs termwiz (heavier, pulls wezterm-mux).
+            </div>
+          </div>
+          <div class="decision-item">
+            <div class="label">PTY Abstraction</div>
+            <div class="value">portable-pty</div>
+            <div class="reason">
+              Only Rust crate handling ConPTY (Windows) correctly. WSL2 shell
+              requires ConPTY. No alternative.
+            </div>
+          </div>
+          <div class="decision-item">
+            <div class="label">Font / Glyph Atlas</div>
+            <div class="value">wezterm-font</div>
+            <div class="reason">
+              Handles Nerd Font PUA glyphs, font fallback, shaping. fontdue
+              alone can't do fallback; FreeType bindings = weeks of work.
+            </div>
+          </div>
+          <div class="decision-item">
+            <div class="label">Async Runtime</div>
+            <div class="value">tokio</div>
+            <div class="reason">
+              PTY read + config watch + socket server all need async. Largest
+              ecosystem. vs async-std (less maintained).
+            </div>
+          </div>
+          <div class="decision-item">
+            <div class="label">Config Format</div>
+            <div class="value">TOML</div>
+            <div class="reason">
+              No comments problem (JSON). No indentation footguns (YAML). No
+              runtime (Lua). Already used by Cargo — users know it.
+            </div>
+          </div>
+          <div class="decision-item">
+            <div class="label">Layout Model</div>
+            <div class="value">Binary split tree</div>
+            <div class="reason">
+              Same as i3/tmux. Resize reflow is O(depth). Two-level
+              (tab→pane) vs tmux's three-level (session→window→pane) is simpler.
+            </div>
+          </div>
+          <div class="decision-item">
+            <div class="label">Draw Call Strategy</div>
+            <div class="value">Instanced draw</div>
+            <div class="reason">
+              Collapses 11,000 cell draws to 1 GPU call. Geometry shaders
+              deprecated in Metal. Compute-shader approach adds barrier
+              complexity for no gain at this scale.
+            </div>
+          </div>
+        </div>
+
+        <!-- Keybindings -->
+        <h3 id="keybinds">Default Keybindings</h3>
+        <div class="alert alert-info">
+          <span class="alert-icon">ℹ</span>
+          <span
+            >All defaults are conflict-free with readline/shell shortcuts. Only
+            <kbd>Ctrl+Z</kbd> conflicts (SIGTSTP) — documented in
+            <code>default.toml</code>. See <code>docs/04-ux-config.md</code> §4
+            for full rationale.</span
+          >
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Tabs &amp; Panes</div>
+              <div class="card-sub">
+                All Ctrl+Shift bindings to avoid shell conflicts
+              </div>
+            </div>
+          </div>
+          <div class="keybind-row">
+            <kbd>Ctrl+Shift+T</kbd> <span class="keybind-action">New tab</span>
+            <span class="keybind-note"
+              >Matches kitty. No readline conflict.</span
+            >
+          </div>
+          <div class="keybind-row">
+            <kbd>Ctrl+Shift+W</kbd>
+            <span class="keybind-action">Close pane / tab</span>
+            <span class="keybind-note"
+              >Matches kitty. Avoids kill-word conflict.</span
+            >
+          </div>
+          <div class="keybind-row">
+            <kbd>Ctrl+Shift+H</kbd>
+            <span class="keybind-action">Split horizontal (side-by-side)</span>
+            <span class="keybind-note">H = horizontal layout growth</span>
+          </div>
+          <div class="keybind-row">
+            <kbd>Ctrl+Shift+V</kbd>
+            <span class="keybind-action">Split vertical (stacked)</span>
+            <span class="keybind-note">V = vertical layout growth</span>
+          </div>
+          <div class="keybind-row">
+            <kbd>Ctrl+Tab</kbd>
+            <span class="keybind-action">Focus next pane</span>
+            <span class="keybind-note"
+              >Universal next-tab muscle memory. No shell conflict.</span
+            >
+          </div>
+          <div class="keybind-row">
+            <kbd>Ctrl+Shift+Tab</kbd>
+            <span class="keybind-action">Focus previous pane</span>
+            <span class="keybind-note"
+              >Universal prev-tab. No shell conflict.</span
+            >
+          </div>
+          <div class="keybind-row">
+            <kbd>Ctrl+Z</kbd>
+            <span class="keybind-action">Zoom / unzoom pane</span>
+            <span class="keybind-note"
+              >⚠ Conflicts with SIGTSTP. Rebind if you use fg/bg.</span
+            >
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      // Highlight active nav link based on scroll position
+      const sections = document.querySelectorAll("[id]");
+      const navLinks = document.querySelectorAll(".sidebar-nav a");
+      window.addEventListener("scroll", () => {
+        let current = "";
+        sections.forEach((s) => {
+          if (window.scrollY >= s.offsetTop - 80) current = s.id;
+        });
+        navLinks.forEach((a) => {
+          a.classList.toggle(
+            "active",
+            a.getAttribute("href") === "#" + current,
+          );
+        });
+      });
+    </script>
+  </body>
+</html>
