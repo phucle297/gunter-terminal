@@ -1,6 +1,6 @@
 # Gunter — Rust Terminal Emulator
 
-> Fast, GPU-accelerated terminal for Windows/WSL. Inspired by kitty, Hyper, and tmux.
+> Fast, GPU-accelerated terminal for Windows/WSL. Inspired by kitty, hyprland, and tmux.
 > Atom One Dark theme · ComicShannsMono Nerd Font Mono
 
 ---
