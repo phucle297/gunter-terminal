@@ -5,8 +5,9 @@ use gunter_core::grid::Grid;
 use gunter_renderer::GunterRenderer;
 use gunter_term::performer::GridPerformer;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 const COLS: u16 = 80;
@@ -17,7 +18,10 @@ struct GunterApp {
     renderer: Option<GunterRenderer>,
     grid: Grid,
     pty_rx: mpsc::Receiver<Vec<u8>>,
+    pty_tx: mpsc::SyncSender<Vec<u8>>,
+    pty_resize_tx: mpsc::SyncSender<(u16, u16)>,
     parser: vte::Parser,
+    modifiers: winit::event::Modifiers,
 }
 
 impl ApplicationHandler for GunterApp {
@@ -31,7 +35,6 @@ impl ApplicationHandler for GunterApp {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let renderer = pollster::block_on(GunterRenderer::new(window.clone(), COLS, ROWS));
 
-        // Resize window to exact cell grid dimensions once cell size is known
         let (cw, ch) = renderer.cell_size();
         let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(
             (COLS as f32 * cw) as u32,
@@ -51,9 +54,30 @@ impl ApplicationHandler for GunterApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
+
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed {
+                    if let Some(bytes) = translate_key(&event) {
+                        let _ = self.pty_tx.try_send(bytes);
+                    }
+                }
+            }
+
             WindowEvent::Resized(size) => {
                 if let Some(r) = &mut self.renderer {
                     r.resize(size.width, size.height);
+                    let (cw, ch) = r.cell_size();
+                    if cw > 0.0 && ch > 0.0 {
+                        let cols = (size.width as f32 / cw) as u16;
+                        let rows = (size.height as f32 / ch) as u16;
+                        if cols > 0 && rows > 0 {
+                            let _ = self.pty_resize_tx.try_send((cols, rows));
+                            self.grid.resize(cols, rows);
+                        }
+                    }
                 }
             }
 
@@ -80,14 +104,52 @@ impl ApplicationHandler for GunterApp {
     }
 }
 
+fn translate_key(event: &winit::event::KeyEvent) -> Option<Vec<u8>> {
+    match &event.logical_key {
+        Key::Character(s) => Some(s.as_str().as_bytes().to_vec()),
+        Key::Named(named) => match named {
+            NamedKey::Enter => Some(b"\r".to_vec()),
+            NamedKey::Backspace => Some(b"\x7f".to_vec()),
+            NamedKey::Tab => Some(b"\x09".to_vec()),
+            NamedKey::Escape => Some(b"\x1b".to_vec()),
+            NamedKey::ArrowUp => Some(b"\x1b[A".to_vec()),
+            NamedKey::ArrowDown => Some(b"\x1b[B".to_vec()),
+            NamedKey::ArrowRight => Some(b"\x1b[C".to_vec()),
+            NamedKey::ArrowLeft => Some(b"\x1b[D".to_vec()),
+            NamedKey::Home => Some(b"\x1b[H".to_vec()),
+            NamedKey::End => Some(b"\x1b[F".to_vec()),
+            NamedKey::PageUp => Some(b"\x1b[5~".to_vec()),
+            NamedKey::PageDown => Some(b"\x1b[6~".to_vec()),
+            NamedKey::Delete => Some(b"\x1b[3~".to_vec()),
+            NamedKey::Insert => Some(b"\x1b[2~".to_vec()),
+            NamedKey::F1 => Some(b"\x1bOP".to_vec()),
+            NamedKey::F2 => Some(b"\x1bOQ".to_vec()),
+            NamedKey::F3 => Some(b"\x1bOR".to_vec()),
+            NamedKey::F4 => Some(b"\x1bOS".to_vec()),
+            NamedKey::F5 => Some(b"\x1b[15~".to_vec()),
+            NamedKey::F6 => Some(b"\x1b[17~".to_vec()),
+            NamedKey::F7 => Some(b"\x1b[18~".to_vec()),
+            NamedKey::F8 => Some(b"\x1b[19~".to_vec()),
+            NamedKey::F9 => Some(b"\x1b[20~".to_vec()),
+            NamedKey::F10 => Some(b"\x1b[21~".to_vec()),
+            NamedKey::F11 => Some(b"\x1b[23~".to_vec()),
+            NamedKey::F12 => Some(b"\x1b[24~".to_vec()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn main() {
     env_logger::init();
 
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let (key_tx, key_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+    let (resize_tx, resize_rx) = mpsc::sync_channel::<(u16, u16)>(4);
 
     std::thread::spawn(move || {
         use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-        use std::io::Read;
+        use std::io::{Read, Write};
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -99,9 +161,20 @@ fn main() {
         let _child = pair.slave.spawn_command(cmd).expect("spawn shell");
         drop(pair.slave);
 
+        let mut writer = pair.master.take_writer().expect("take writer");
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
+
+        std::thread::spawn(move || {
+            while let Ok(bytes) = key_rx.recv() {
+                let _ = writer.write_all(&bytes);
+            }
+        });
+
         let mut buf = [0u8; 4096];
         loop {
+            while let Ok((cols, rows)) = resize_rx.try_recv() {
+                let _ = pair.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+            }
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
@@ -119,7 +192,10 @@ fn main() {
         renderer: None,
         grid: Grid::new(COLS, ROWS),
         pty_rx: rx,
+        pty_tx: key_tx,
+        pty_resize_tx: resize_tx,
         parser: vte::Parser::new(),
+        modifiers: winit::event::Modifiers::default(),
     };
     event_loop.run_app(&mut app).expect("run_app");
 }

@@ -34,6 +34,10 @@ impl<'a> GridPerformer<'a> {
             flags: CellFlags::NONE,
         }
     }
+
+    fn blank(&self) -> Cell {
+        Cell { ch: ' ', fg: self.fg, bg: self.bg, flags: CellFlags::NONE }
+    }
 }
 
 impl<'a> vte::Perform for GridPerformer<'a> {
@@ -80,7 +84,7 @@ impl<'a> vte::Perform for GridPerformer<'a> {
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
-        _intermediates: &[u8],
+        intermediates: &[u8],
         _ignore: bool,
         action: char,
     ) {
@@ -120,6 +124,166 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 let x = self.grid.cursor.0;
                 self.grid.cursor.0 = x.saturating_sub(n);
             }
+            // Cursor Next Line N
+            'E' => {
+                let n = first_param(params, 1) as u16;
+                let y = self.grid.cursor.1;
+                let next = y + n;
+                self.grid.cursor.1 = next.min(self.grid.rows - 1);
+                self.grid.cursor.0 = 0;
+            }
+            // Cursor Preceding Line N
+            'F' => {
+                let n = first_param(params, 1) as u16;
+                let y = self.grid.cursor.1;
+                self.grid.cursor.1 = y.saturating_sub(n);
+                self.grid.cursor.0 = 0;
+            }
+            // Cursor Column Absolute (1-based)
+            'G' => {
+                let col = first_param(params, 1) as u16;
+                let col = col.saturating_sub(1);
+                self.grid.cursor.0 = col.min(self.grid.cols - 1);
+            }
+            // Line Position Absolute (1-based)
+            'd' => {
+                let row = first_param(params, 1) as u16;
+                let row = row.saturating_sub(1);
+                self.grid.cursor.1 = row.min(self.grid.rows - 1);
+            }
+            // Erase in Display
+            'J' => {
+                let param = first_param_raw(params, 0);
+                let (cx, cy) = self.grid.cursor;
+                let cols = self.grid.cols;
+                let rows = self.grid.rows;
+                let blank = self.blank();
+                match param {
+                    0 => {
+                        for x in cx..cols { self.grid.write_cell(x, cy, blank); }
+                        for y in (cy + 1)..rows {
+                            for x in 0..cols { self.grid.write_cell(x, y, blank); }
+                        }
+                    }
+                    1 => {
+                        for y in 0..cy {
+                            for x in 0..cols { self.grid.write_cell(x, y, blank); }
+                        }
+                        for x in 0..=cx { self.grid.write_cell(x, cy, blank); }
+                    }
+                    2 | 3 => {
+                        for y in 0..rows {
+                            for x in 0..cols { self.grid.write_cell(x, y, blank); }
+                        }
+                        self.grid.cursor = (0, 0);
+                    }
+                    _ => {}
+                }
+            }
+            // Erase in Line
+            'K' => {
+                let param = first_param_raw(params, 0);
+                let (cx, cy) = self.grid.cursor;
+                let cols = self.grid.cols;
+                let blank = self.blank();
+                match param {
+                    0 => {
+                        for x in cx..cols { self.grid.write_cell(x, cy, blank); }
+                    }
+                    1 => {
+                        for x in 0..=cx { self.grid.write_cell(x, cy, blank); }
+                    }
+                    2 => {
+                        for x in 0..cols { self.grid.write_cell(x, cy, blank); }
+                    }
+                    _ => {}
+                }
+            }
+            // DECSTBM — Set Scroll Region
+            'r' => {
+                let mut iter = params.iter();
+                let top = iter.next().and_then(|s| s.first().copied()).unwrap_or(1);
+                let bot = iter.next().and_then(|s| s.first().copied()).unwrap_or(self.grid.rows);
+                let top = if top == 0 { 0 } else { (top - 1) as u16 };
+                let bot = if bot == 0 { self.grid.rows - 1 } else { (bot - 1) as u16 };
+                self.grid.scroll_top = top.min(self.grid.rows - 1);
+                self.grid.scroll_bot = bot.min(self.grid.rows - 1);
+                self.grid.cursor = (0, 0);
+            }
+            // Scroll Up N lines
+            'S' => {
+                let n = first_param(params, 1);
+                self.grid.scroll_up(n);
+            }
+            // Scroll Down N lines
+            'T' => {
+                let n = first_param(params, 1);
+                self.grid.scroll_down(n);
+            }
+            // Insert N Lines at cursor row
+            'L' => {
+                let n = first_param(params, 1);
+                let saved_top = self.grid.scroll_top;
+                self.grid.scroll_top = self.grid.cursor.1;
+                self.grid.scroll_down(n);
+                self.grid.scroll_top = saved_top;
+            }
+            // Delete N Lines at cursor row
+            'M' => {
+                let n = first_param(params, 1);
+                let saved_top = self.grid.scroll_top;
+                self.grid.scroll_top = self.grid.cursor.1;
+                self.grid.scroll_up(n);
+                self.grid.scroll_top = saved_top;
+            }
+            // Insert N Characters (shift right)
+            '@' => {
+                let n = first_param(params, 1) as usize;
+                let cx = self.grid.cursor.0 as usize;
+                let cy = self.grid.cursor.1;
+                let cols = self.grid.cols as usize;
+                let blank = self.blank();
+                let saved: Vec<Cell> = (cx..cols.saturating_sub(n))
+                    .map(|c| self.grid.cells[cy as usize * cols + c])
+                    .collect();
+                let end = cols.min(cx + n);
+                for c in cx..end {
+                    self.grid.write_cell(c as u16, cy, blank);
+                }
+                for (i, cell) in saved.into_iter().enumerate() {
+                    let dst = cx + n + i;
+                    if dst < cols { self.grid.write_cell(dst as u16, cy, cell); }
+                }
+            }
+            // Delete N Characters (shift left)
+            'P' => {
+                let n = first_param(params, 1) as usize;
+                let cx = self.grid.cursor.0 as usize;
+                let cy = self.grid.cursor.1;
+                let cols = self.grid.cols as usize;
+                let blank = self.blank();
+                for c in cx..cols {
+                    let src_c = c + n;
+                    let cell = if src_c < cols {
+                        self.grid.cells[cy as usize * cols + src_c]
+                    } else {
+                        blank
+                    };
+                    self.grid.write_cell(c as u16, cy, cell);
+                }
+            }
+            // Erase N Characters (no cursor move)
+            'X' => {
+                let n = first_param(params, 1) as u16;
+                let (cx, cy) = self.grid.cursor;
+                let blank = self.blank();
+                for i in 0..n {
+                    let x = cx + i;
+                    if x < self.grid.cols {
+                        self.grid.write_cell(x, cy, blank);
+                    }
+                }
+            }
             // SGR — Select Graphic Rendition
             'm' => {
                 // No params at all means SGR 0 (reset).
@@ -149,6 +313,32 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                     }
                 }
             }
+            // Private mode set
+            'h' if intermediates == b"?" => {
+                for sub in params.iter() {
+                    match sub.first().copied().unwrap_or(0) {
+                        25 => self.grid.cursor_visible = true,
+                        1000 | 1002 => self.grid.mouse_reporting = true,
+                        1006 => { self.grid.mouse_reporting = true; self.grid.mouse_sgr = true; }
+                        2004 => self.grid.bracketed_paste = true,
+                        1049 => self.grid.enter_alt(),
+                        _ => {}
+                    }
+                }
+            }
+            // Private mode reset
+            'l' if intermediates == b"?" => {
+                for sub in params.iter() {
+                    match sub.first().copied().unwrap_or(0) {
+                        25 => self.grid.cursor_visible = false,
+                        1000 | 1002 => self.grid.mouse_reporting = false,
+                        1006 => { self.grid.mouse_reporting = false; self.grid.mouse_sgr = false; }
+                        2004 => self.grid.bracketed_paste = false,
+                        1049 => self.grid.exit_alt(),
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -158,6 +348,11 @@ impl<'a> vte::Perform for GridPerformer<'a> {
 fn first_param(params: &vte::Params, default: u16) -> u16 {
     let v = params.iter().next().and_then(|s| s.first().copied()).unwrap_or(0);
     if v == 0 { default } else { v as u16 }
+}
+
+/// Extract first scalar param raw (zero is a valid value here).
+fn first_param_raw(params: &vte::Params, default: u16) -> u16 {
+    params.iter().next().and_then(|s| s.first().copied()).unwrap_or(default) as u16
 }
 
 // ---------------------------------------------------------------------------
@@ -356,5 +551,94 @@ mod tests {
         let mut parser = vte::Parser::new();
         for b in b"\n" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.1, 23); // stays at last row
+    }
+
+    #[test]
+    fn erase_to_end_of_line() {
+        let mut grid = make_grid();
+        // write 'X' at cols 0-4, then move to col 2 and CSI 0K
+        for b in b"XXXXX" { vte::Parser::new().advance(&mut GridPerformer::new(&mut grid), *b); }
+        grid.cursor_move(2, 0);
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[0K" { parser.advance(&mut p, *b); }
+        // cols 0,1 should still be 'X'; cols 2+ should be ' '
+        assert_eq!(grid.cells[0].ch, 'X');
+        assert_eq!(grid.cells[1].ch, 'X');
+        assert_eq!(grid.cells[2].ch, ' ');
+        assert_eq!(grid.cells[3].ch, ' ');
+    }
+
+    #[test]
+    fn erase_entire_line() {
+        let mut grid = make_grid();
+        // write 'X' across row 0
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            for b in b"XXXXX" { parser.advance(&mut p, *b); }
+        }
+        grid.cursor_move(0, 0);
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[2K" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cells[0].ch, ' ');
+        assert_eq!(grid.cells[4].ch, ' ');
+    }
+
+    #[test]
+    fn erase_to_end_of_display() {
+        let mut grid = make_grid();
+        // write 'X' on row 0 and row 1
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            for b in b"XX\nXX" { parser.advance(&mut p, *b); }
+        }
+        // move to row 1 col 0, erase to end of display
+        grid.cursor_move(0, 1);
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[0J" { parser.advance(&mut p, *b); }
+        // row 0 should still have 'X' at cols 0,1
+        assert_eq!(grid.cells[0].ch, 'X');
+        assert_eq!(grid.cells[1].ch, 'X');
+        // row 1 onward should be blank
+        assert_eq!(grid.cells[80].ch, ' ');
+        assert_eq!(grid.cells[81].ch, ' ');
+    }
+
+    #[test]
+    fn scroll_region_set() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // CSI 2;5r → scroll_top=1 (0-based), scroll_bot=4 (0-based)
+        for b in b"\x1b[2;5r" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.scroll_top, 1);
+        assert_eq!(grid.scroll_bot, 4);
+    }
+
+    #[test]
+    fn alternate_screen_enter_exit() {
+        let mut grid = make_grid();
+        // write sentinel on primary screen
+        grid.write_cell(0, 0, Cell { ch: 'Z', fg: DEFAULT_FG, bg: DEFAULT_BG, flags: CellFlags::NONE });
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            // enter alt screen
+            for b in b"\x1b[?1049h" { parser.advance(&mut p, *b); }
+        }
+        assert!(grid.alt_active);
+        assert_eq!(grid.cells[0].ch, ' '); // alt screen is blank
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            // exit alt screen
+            for b in b"\x1b[?1049l" { parser.advance(&mut p, *b); }
+        }
+        assert!(!grid.alt_active);
+        assert_eq!(grid.cells[0].ch, 'Z'); // primary restored
     }
 }
