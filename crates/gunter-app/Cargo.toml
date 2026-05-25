@@ -16,3 +16,4 @@ vte = { workspace = true }
 winit = { workspace = true }
 pollster = { workspace = true }
 env_logger = { workspace = true }
+arboard = { workspace = true }
