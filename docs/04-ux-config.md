@@ -46,7 +46,7 @@ Conflict handling: last definition wins, warning to stderr. Known shell-shortcut
 
 **Ctrl+Shift+H / Ctrl+Shift+V for splits:** without Shift, `Ctrl+H` = ASCII 0x08 (backspace) in many terminals. Shift disambiguates. H = horizontal layout growth (panes side-by-side), V = vertical growth (panes stacked).
 
-Axis naming: Gunter follows i3/hyprland convention — `split_h` = side-by-side (vertical divider), `split_v` = stacked (horizontal divider). The axis is the direction of layout growth, not divider orientation. **This conflicts with tmux's naming and must be documented prominently.**
+Axis naming: Gunter follows i3 convention — `split_h` = side-by-side (vertical divider), `split_v` = stacked (horizontal divider). The axis is the direction of layout growth, not divider orientation. **This conflicts with tmux's naming and must be documented prominently.**
 
 **Ctrl+Tab / Ctrl+Shift+Tab for pane focus:** universal browser/IDE "cycle tabs" muscle memory. `Ctrl+L` = readline clear-screen. `Ctrl+H` = backspace. `Ctrl+Arrow` = word-jump in readline and most editors. All three conflict with fundamental shell interactions and were removed.
 
