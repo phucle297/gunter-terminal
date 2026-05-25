@@ -17,6 +17,18 @@ const ANSI_COLORS: [Color; 8] = [
     Color { r: 171, g: 178, b: 191 },  // 7 white   #abb2bf
 ];
 
+/// Bright colors for SGR 90-97 / 100-107 (Atom One Dark bright palette).
+const BRIGHT_COLORS: [Color; 8] = [
+    Color { r: 79,  g: 86,  b: 102 },  // bright black  #4f5666
+    Color { r: 224, g: 108, b: 117 },  // bright red    #e06c75
+    Color { r: 152, g: 195, b: 121 },  // bright green  #98c379
+    Color { r: 229, g: 192, b: 123 },  // bright yellow #e5c07b
+    Color { r: 97,  g: 175, b: 239 },  // bright blue   #61afef
+    Color { r: 198, g: 120, b: 221 },  // bright magenta #c678dd
+    Color { r: 86,  g: 182, b: 194 },  // bright cyan   #56b6c2
+    Color { r: 255, g: 255, b: 255 },  // bright white  #ffffff
+];
+
 /// VTE performer that writes parsed terminal output into a [`Grid`].
 pub struct GridPerformer<'a> {
     pub grid: &'a mut Grid,
@@ -286,7 +298,6 @@ impl<'a> vte::Perform for GridPerformer<'a> {
             }
             // SGR — Select Graphic Rendition
             'm' => {
-                // No params at all means SGR 0 (reset).
                 let mut iter = params.iter().peekable();
                 if iter.peek().is_none() {
                     self.fg = DEFAULT_FG;
@@ -294,23 +305,49 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                     self.flags = CellFlags::NONE;
                     return;
                 }
-                for sub in iter {
-                    let code = sub.first().copied().unwrap_or(0);
-                    match code {
-                        0 => {
-                            self.fg = DEFAULT_FG;
-                            self.bg = DEFAULT_BG;
-                            self.flags = CellFlags::NONE;
-                        }
+                let codes: Vec<u16> = params.iter()
+                    .flat_map(|sub| sub.iter().copied())
+                    .collect();
+                let mut i = 0;
+                while i < codes.len() {
+                    match codes[i] {
+                        0 => { self.fg = DEFAULT_FG; self.bg = DEFAULT_BG; self.flags = CellFlags::NONE; }
                         1 => self.flags |= CellFlags::BOLD,
                         3 => self.flags |= CellFlags::ITALIC,
                         4 => self.flags |= CellFlags::UNDERLINE,
-                        30..=37 => self.fg = ANSI_COLORS[(code - 30) as usize],
+                        5 => self.flags |= CellFlags::BLINK,
+                        7 => self.flags |= CellFlags::INVERSE,
+                        22 => self.flags &= !CellFlags::BOLD,
+                        23 => self.flags &= !CellFlags::ITALIC,
+                        24 => self.flags &= !CellFlags::UNDERLINE,
+                        27 => self.flags &= !CellFlags::INVERSE,
+                        30..=37 => self.fg = ANSI_COLORS[(codes[i] - 30) as usize],
+                        38 => {
+                            if i + 2 < codes.len() && codes[i+1] == 5 {
+                                self.fg = xterm256(codes[i+2]);
+                                i += 2;
+                            } else if i + 4 < codes.len() && codes[i+1] == 2 {
+                                self.fg = Color { r: codes[i+2] as u8, g: codes[i+3] as u8, b: codes[i+4] as u8 };
+                                i += 4;
+                            }
+                        }
                         39 => self.fg = DEFAULT_FG,
-                        40..=47 => self.bg = ANSI_COLORS[(code - 40) as usize],
+                        40..=47 => self.bg = ANSI_COLORS[(codes[i] - 40) as usize],
+                        48 => {
+                            if i + 2 < codes.len() && codes[i+1] == 5 {
+                                self.bg = xterm256(codes[i+2]);
+                                i += 2;
+                            } else if i + 4 < codes.len() && codes[i+1] == 2 {
+                                self.bg = Color { r: codes[i+2] as u8, g: codes[i+3] as u8, b: codes[i+4] as u8 };
+                                i += 4;
+                            }
+                        }
                         49 => self.bg = DEFAULT_BG,
-                        _ => {} // unhandled — ignored per spec
+                        90..=97 => self.fg = BRIGHT_COLORS[(codes[i] - 90) as usize],
+                        100..=107 => self.bg = BRIGHT_COLORS[(codes[i] - 100) as usize],
+                        _ => {}
                     }
+                    i += 1;
                 }
             }
             // Private mode set
@@ -353,6 +390,26 @@ fn first_param(params: &vte::Params, default: u16) -> u16 {
 /// Extract first scalar param raw (zero is a valid value here).
 fn first_param_raw(params: &vte::Params, default: u16) -> u16 {
     params.iter().next().and_then(|s| s.first().copied()).unwrap_or(default) as u16
+}
+
+fn xterm256(n: u16) -> Color {
+    match n {
+        0..=7 => ANSI_COLORS[n as usize],
+        8..=15 => BRIGHT_COLORS[(n - 8) as usize],
+        16..=231 => {
+            let n = n - 16;
+            let b = n % 6;
+            let g = (n / 6) % 6;
+            let r = n / 36;
+            let cv = |v: u16| -> u8 { if v == 0 { 0 } else { (55 + v * 40) as u8 } };
+            Color { r: cv(r), g: cv(g), b: cv(b) }
+        }
+        232..=255 => {
+            let v = (8 + (n - 232) * 10) as u8;
+            Color { r: v, g: v, b: v }
+        }
+        _ => Color { r: 0, g: 0, b: 0 }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +674,44 @@ mod tests {
         for b in b"\x1b[2;5r" { parser.advance(&mut p, *b); }
         assert_eq!(grid.scroll_top, 1);
         assert_eq!(grid.scroll_bot, 4);
+    }
+
+    #[test]
+    fn sgr_bright_fg() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // SGR 91 = bright red fg
+        for b in b"\x1b[91mX" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cells[0].fg, Color { r: 224, g: 108, b: 117 });
+    }
+
+    #[test]
+    fn sgr_256_fg() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // SGR 38;5;196 → index 196: n=180, r=5,g=0,b=0 → Color{255,0,0}
+        for b in b"\x1b[38;5;196mX" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cells[0].fg, Color { r: 255, g: 0, b: 0 });
+    }
+
+    #[test]
+    fn sgr_truecolor_fg() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[38;2;100;200;50mX" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cells[0].fg, Color { r: 100, g: 200, b: 50 });
+    }
+
+    #[test]
+    fn sgr_truecolor_bg() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[48;2;10;20;30mX" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cells[0].bg, Color { r: 10, g: 20, b: 30 });
     }
 
     #[test]

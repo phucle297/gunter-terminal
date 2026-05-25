@@ -56,6 +56,8 @@ pub struct GunterRenderer {
     cell_h: f32,
     cols: u16,
     rows: u16,
+    instances: Vec<CellInstance>,
+    last_cursor: (u16, u16),
 }
 
 impl GunterRenderer {
@@ -266,6 +268,13 @@ impl GunterRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
         let instance_count = (cols as usize) * (rows as usize);
+        let instances: Vec<CellInstance> = vec![CellInstance {
+            cell_pos: [0.0; 2],
+            bg: [40.0 / 255.0, 44.0 / 255.0, 52.0 / 255.0],
+            fg: [171.0 / 255.0, 178.0 / 255.0, 191.0 / 255.0],
+            uv_min: [0.0; 2],
+            uv_max: [0.0; 2],
+        }; instance_count];
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("instance_buf"),
             size: (std::mem::size_of::<CellInstance>() * instance_count) as u64,
@@ -322,6 +331,8 @@ impl GunterRenderer {
             cell_h,
             cols,
             rows,
+            instances,
+            last_cursor: (0, 0),
         }
     }
 
@@ -342,32 +353,101 @@ impl GunterRenderer {
         );
     }
 
-    pub fn render(&mut self, grid: &Grid) {
-        let mut instances = Vec::with_capacity((self.cols as usize) * (self.rows as usize));
+    pub fn render(&mut self, grid: &mut Grid) {
+        use gunter_core::grid::CursorStyle;
+
+        let cursor_moved = self.last_cursor != grid.cursor;
+        let mut changed = cursor_moved;
+
+        // Update dirty cells
         for row in 0..self.rows {
             for col in 0..self.cols {
                 let idx = (row as usize) * (self.cols as usize) + (col as usize);
+                if grid.dirty[idx] {
+                    let cell = &grid.cells[idx];
+                    let (uv_min, uv_max) = self.atlas.uv_for_char(cell.ch);
+                    self.instances[idx] = CellInstance {
+                        cell_pos: [col as f32, row as f32],
+                        bg: [
+                            cell.bg.r as f32 / 255.0,
+                            cell.bg.g as f32 / 255.0,
+                            cell.bg.b as f32 / 255.0,
+                        ],
+                        fg: [
+                            cell.fg.r as f32 / 255.0,
+                            cell.fg.g as f32 / 255.0,
+                            cell.fg.b as f32 / 255.0,
+                        ],
+                        uv_min,
+                        uv_max,
+                    };
+                    changed = true;
+                }
+            }
+        }
+
+        // Restore previous cursor cell to normal colours (prevent ghost)
+        if cursor_moved {
+            let (px, py) = self.last_cursor;
+            let pidx = py as usize * self.cols as usize + px as usize;
+            if pidx < self.instances.len() {
+                let pcell = &grid.cells[pidx];
+                let (puv_min, puv_max) = self.atlas.uv_for_char(pcell.ch);
+                self.instances[pidx] = CellInstance {
+                    cell_pos: [px as f32, py as f32],
+                    bg: [
+                        pcell.bg.r as f32 / 255.0,
+                        pcell.bg.g as f32 / 255.0,
+                        pcell.bg.b as f32 / 255.0,
+                    ],
+                    fg: [
+                        pcell.fg.r as f32 / 255.0,
+                        pcell.fg.g as f32 / 255.0,
+                        pcell.fg.b as f32 / 255.0,
+                    ],
+                    uv_min: puv_min,
+                    uv_max: puv_max,
+                };
+            }
+        }
+
+        // Render cursor — override cursor cell (Block: swap fg/bg with cursor colour)
+        if grid.cursor_visible {
+            let (cx, cy) = grid.cursor;
+            let idx = cy as usize * self.cols as usize + cx as usize;
+            if idx < self.instances.len() {
                 let cell = &grid.cells[idx];
                 let (uv_min, uv_max) = self.atlas.uv_for_char(cell.ch);
-                instances.push(CellInstance {
-                    cell_pos: [col as f32, row as f32],
-                    bg: [
+                // Atom One Dark cursor #528bff = rgb(82, 139, 255)
+                let cursor_bg = [82.0 / 255.0, 139.0 / 255.0, 1.0f32];
+                let _ = CursorStyle::Block; // only Block implemented; field used for future match
+                self.instances[idx] = CellInstance {
+                    cell_pos: [cx as f32, cy as f32],
+                    bg: cursor_bg,
+                    fg: [
                         cell.bg.r as f32 / 255.0,
                         cell.bg.g as f32 / 255.0,
                         cell.bg.b as f32 / 255.0,
                     ],
-                    fg: [
-                        cell.fg.r as f32 / 255.0,
-                        cell.fg.g as f32 / 255.0,
-                        cell.fg.b as f32 / 255.0,
-                    ],
                     uv_min,
                     uv_max,
-                });
+                };
+                changed = true;
             }
+            self.last_cursor = grid.cursor;
         }
 
-        self.queue.write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&instances));
+        let instance_count = self.instances.len() as u32;
+
+        if changed {
+            self.queue.write_buffer(
+                &self.instance_buf,
+                0,
+                bytemuck::cast_slice(&self.instances),
+            );
+        }
+
+        grid.clear_dirty();
 
         let output = match self.surface.get_current_texture() {
             Ok(t) => t,
@@ -409,7 +489,7 @@ impl GunterRenderer {
             rp.set_vertex_buffer(0, self.vertex_buf.slice(..));
             rp.set_vertex_buffer(1, self.instance_buf.slice(..));
             rp.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint16);
-            rp.draw_indexed(0..6, 0, 0..instances.len() as u32);
+            rp.draw_indexed(0..6, 0, 0..instance_count);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();

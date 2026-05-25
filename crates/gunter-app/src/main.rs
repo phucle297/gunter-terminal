@@ -89,7 +89,7 @@ impl ApplicationHandler for GunterApp {
                     }
                 }
                 if let Some(r) = &mut self.renderer {
-                    r.render(&self.grid);
+                    r.render(&mut self.grid);
                 }
             }
 
