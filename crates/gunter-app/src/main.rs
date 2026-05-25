@@ -1,9 +1,12 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc;
 
 use gunter_core::grid::Grid;
+use gunter_core::layout::{Axis, Layout, Rect};
 use gunter_renderer::GunterRenderer;
 use gunter_term::performer::GridPerformer;
+use uuid::Uuid;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -13,14 +16,87 @@ use winit::window::{Window, WindowId};
 const COLS: u16 = 80;
 const ROWS: u16 = 24;
 
+struct PtyHandle {
+    pty_tx: mpsc::SyncSender<Vec<u8>>,
+    pty_resize_tx: mpsc::SyncSender<(u16, u16)>,
+    pty_rx: mpsc::Receiver<Vec<u8>>,
+}
+
+struct SessionState {
+    grid: Grid,
+    parser: vte::Parser,
+    pty: PtyHandle,
+}
+
+impl SessionState {
+    fn new(cols: u16, rows: u16) -> Self {
+        let (pty_out_tx, pty_out_rx) = mpsc::channel::<Vec<u8>>();
+        let (key_tx, key_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        let (resize_tx, resize_rx) = mpsc::sync_channel::<(u16, u16)>(4);
+
+        std::thread::spawn(move || {
+            use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+            use std::io::{Read, Write};
+
+            let pty_system = native_pty_system();
+            let pair = pty_system
+                .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+                .expect("openpty failed");
+
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+            let _child = pair.slave.spawn_command(CommandBuilder::new(&shell)).expect("spawn shell");
+            drop(pair.slave);
+
+            let mut writer = pair.master.take_writer().expect("take writer");
+            let mut reader = pair.master.try_clone_reader().expect("clone reader");
+
+            std::thread::spawn(move || {
+                while let Ok(bytes) = key_rx.recv() {
+                    let _ = writer.write_all(&bytes);
+                }
+            });
+
+            let mut buf = [0u8; 4096];
+            loop {
+                while let Ok((c, r)) = resize_rx.try_recv() {
+                    let _ = pair.master.resize(PtySize {
+                        rows: r,
+                        cols: c,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if pty_out_tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        SessionState {
+            grid: Grid::new(cols, rows),
+            parser: vte::Parser::new(),
+            pty: PtyHandle {
+                pty_tx: key_tx,
+                pty_resize_tx: resize_tx,
+                pty_rx: pty_out_rx,
+            },
+        }
+    }
+}
+
 struct GunterApp {
     window: Option<Arc<Window>>,
     renderer: Option<GunterRenderer>,
-    grid: Grid,
-    pty_rx: mpsc::Receiver<Vec<u8>>,
-    pty_tx: mpsc::SyncSender<Vec<u8>>,
-    pty_resize_tx: mpsc::SyncSender<(u16, u16)>,
-    parser: vte::Parser,
+    sessions: HashMap<Uuid, SessionState>,
+    layout: Layout,
+    active_id: Uuid,
+    tab_layouts: Vec<(Layout, HashMap<Uuid, SessionState>)>,
+    active_tab: usize,
     modifiers: winit::event::Modifiers,
     selection_start: Option<(u16, u16)>,
     selection_end: Option<(u16, u16)>,
@@ -30,21 +106,25 @@ struct GunterApp {
 
 impl GunterApp {
     fn extract_selection_text(&self, start: (u16, u16), end: (u16, u16)) -> String {
+        let session = match self.sessions.get(&self.active_id) {
+            Some(s) => s,
+            None => return String::new(),
+        };
         let (mut r1, mut c1) = (start.1 as usize, start.0 as usize);
         let (mut r2, mut c2) = (end.1 as usize, end.0 as usize);
         if (r1, c1) > (r2, c2) {
             std::mem::swap(&mut r1, &mut r2);
             std::mem::swap(&mut c1, &mut c2);
         }
-        let cols = self.grid.cols as usize;
+        let cols = session.grid.cols as usize;
         let mut out = String::new();
         for row in r1..=r2 {
             let start_col = if row == r1 { c1 } else { 0 };
             let end_col = if row == r2 { c2 } else { cols - 1 };
             for col in start_col..=end_col {
                 let idx = row * cols + col;
-                if idx < self.grid.cells.len() {
-                    out.push(self.grid.cells[idx].ch);
+                if idx < session.grid.cells.len() {
+                    out.push(session.grid.cells[idx].ch);
                 }
             }
             if row < r2 {
@@ -95,6 +175,7 @@ impl ApplicationHandler for GunterApp {
                     let shift = self.modifiers.state().shift_key();
                     if ctrl && shift {
                         match &event.logical_key {
+                            // Ctrl+Shift+C — copy selection
                             Key::Character(s) if s.as_str().eq_ignore_ascii_case("c") => {
                                 if let (Some(start), Some(end)) =
                                     (self.selection_start, self.selection_end)
@@ -108,43 +189,141 @@ impl ApplicationHandler for GunterApp {
                                 }
                                 return;
                             }
+                            // Ctrl+Shift+V — paste
                             Key::Character(s) if s.as_str().eq_ignore_ascii_case("v") => {
                                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                     if let Ok(text) = clipboard.get_text() {
-                                        let data = if self.grid.bracketed_paste {
-                                            let mut v = b"\x1b[200~".to_vec();
-                                            v.extend_from_slice(text.as_bytes());
-                                            v.extend_from_slice(b"\x1b[201~");
-                                            v
-                                        } else {
-                                            text.into_bytes()
-                                        };
-                                        let _ = self.pty_tx.try_send(data);
+                                        if let Some(session) = self.sessions.get(&self.active_id) {
+                                            let data = if session.grid.bracketed_paste {
+                                                let mut v = b"\x1b[200~".to_vec();
+                                                v.extend_from_slice(text.as_bytes());
+                                                v.extend_from_slice(b"\x1b[201~");
+                                                v
+                                            } else {
+                                                text.into_bytes()
+                                            };
+                                            let _ = session.pty.pty_tx.try_send(data);
+                                        }
                                     }
+                                }
+                                return;
+                            }
+                            // Ctrl+Shift+H — split horizontal (side by side)
+                            Key::Character(s) if s.as_str().eq_ignore_ascii_case("h") => {
+                                let new_id = Uuid::new_v4();
+                                let new_session = SessionState::new(COLS / 2, ROWS);
+                                self.sessions.insert(new_id, new_session);
+                                self.layout = self.layout.clone().split_leaf(
+                                    self.active_id,
+                                    Axis::Horizontal,
+                                    new_id,
+                                );
+                                self.active_id = new_id;
+                                return;
+                            }
+                            // Ctrl+Shift+V (vertical split) — already handled above as paste
+                            // Use Ctrl+Shift+E for vertical split to avoid conflict
+                            Key::Character(s) if s.as_str().eq_ignore_ascii_case("e") => {
+                                let new_id = Uuid::new_v4();
+                                let new_session = SessionState::new(COLS, ROWS / 2);
+                                self.sessions.insert(new_id, new_session);
+                                self.layout = self.layout.clone().split_leaf(
+                                    self.active_id,
+                                    Axis::Vertical,
+                                    new_id,
+                                );
+                                self.active_id = new_id;
+                                return;
+                            }
+                            // Ctrl+Shift+T — new tab
+                            Key::Character(s) if s.as_str().eq_ignore_ascii_case("t") => {
+                                let new_id = Uuid::new_v4();
+                                let new_session = SessionState::new(COLS, ROWS);
+                                let old_layout =
+                                    std::mem::replace(&mut self.layout, Layout::leaf(new_id));
+                                let old_sessions = std::mem::take(&mut self.sessions);
+                                self.tab_layouts.push((old_layout, old_sessions));
+                                self.sessions.insert(new_id, new_session);
+                                self.active_id = new_id;
+                                self.active_tab = self.tab_layouts.len();
+                                return;
+                            }
+                            // Ctrl+Shift+W — close active tab/pane
+                            Key::Character(s) if s.as_str().eq_ignore_ascii_case("w") => {
+                                let target = self.active_id;
+                                self.sessions.remove(&target);
+                                match self.layout.clone().remove_leaf(target) {
+                                    Some(new_layout) => {
+                                        self.layout = new_layout;
+                                        self.active_id = self.layout.focused();
+                                    }
+                                    None => {
+                                        // last pane in tab — pop previous tab or exit
+                                        if let Some((prev_layout, prev_sessions)) =
+                                            self.tab_layouts.pop()
+                                        {
+                                            self.layout = prev_layout;
+                                            self.sessions = prev_sessions;
+                                            self.active_id = self.layout.focused();
+                                            self.active_tab = self.tab_layouts.len();
+                                        } else {
+                                            event_loop.exit();
+                                        }
+                                    }
+                                }
+                                return;
+                            }
+                            // Ctrl+Shift+Tab — cycle to previous tab
+                            Key::Named(NamedKey::Tab) => {
+                                if !self.tab_layouts.is_empty() {
+                                    let cur_layout =
+                                        std::mem::replace(&mut self.layout, Layout::leaf(Uuid::nil()));
+                                    let cur_sessions = std::mem::take(&mut self.sessions);
+                                    self.tab_layouts.push((cur_layout, cur_sessions));
+                                    let (prev_layout, prev_sessions) =
+                                        self.tab_layouts.remove(0);
+                                    self.layout = prev_layout;
+                                    self.sessions = prev_sessions;
+                                    self.active_id = self.layout.focused();
+                                    self.active_tab = self.active_tab.saturating_sub(1);
                                 }
                                 return;
                             }
                             _ => {}
                         }
                     }
+                    // Ctrl+Tab (no shift) — cycle to next pane within layout
+                    if ctrl && !shift {
+                        if let Key::Named(NamedKey::Tab) = &event.logical_key {
+                            let rects = self.layout.rects(Rect::default());
+                            let ids: Vec<Uuid> = rects.iter().map(|(id, _)| *id).collect();
+                            if let Some(pos) = ids.iter().position(|&id| id == self.active_id) {
+                                self.active_id = ids[(pos + 1) % ids.len()];
+                            }
+                            return;
+                        }
+                    }
                     if let Some(bytes) = translate_key(&event) {
-                        let _ = self.pty_tx.try_send(bytes);
+                        if let Some(session) = self.sessions.get(&self.active_id) {
+                            let _ = session.pty.pty_tx.try_send(bytes);
+                        }
                     }
                 }
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                let lines = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as i32,
-                    winit::event::MouseScrollDelta::PixelDelta(p) => (p.y / 20.0) as i32,
-                };
-                let max_offset = self.grid.scrollback.len();
-                let current = self.grid.scroll_offset as i32;
-                let new_offset =
-                    (current - lines).clamp(0, max_offset as i32) as usize;
-                if new_offset != self.grid.scroll_offset {
-                    self.grid.scroll_offset = new_offset;
-                    self.grid.mark_all_dirty();
+                if let Some(session) = self.sessions.get_mut(&self.active_id) {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y as i32,
+                        winit::event::MouseScrollDelta::PixelDelta(p) => (p.y / 20.0) as i32,
+                    };
+                    let max_offset = session.grid.scrollback.len();
+                    let current = session.grid.scroll_offset as i32;
+                    let new_offset = (current - lines).clamp(0, max_offset as i32) as usize;
+                    if new_offset != session.grid.scroll_offset {
+                        session.grid.scroll_offset = new_offset;
+                        session.grid.mark_all_dirty();
+                    }
                 }
             }
 
@@ -166,36 +345,38 @@ impl ApplicationHandler for GunterApp {
                     }
                     _ => {}
                 }
-                if self.grid.mouse_reporting {
-                    if let Some(r) = &self.renderer {
-                        let (cw, ch) = r.cell_size();
-                        let cx = (self.cursor_pos_px.0 / cw as f64) as u16 + 1;
-                        let cy = (self.cursor_pos_px.1 / ch as f64) as u16 + 1;
-                        let btn = match button {
-                            winit::event::MouseButton::Left => 0u8,
-                            winit::event::MouseButton::Middle => 1,
-                            winit::event::MouseButton::Right => 2,
-                            _ => 3,
-                        };
-                        let press = state == ES::Pressed;
-                        let seq = if self.grid.mouse_sgr {
-                            format!(
-                                "\x1b[<{};{};{}{}",
-                                btn,
-                                cx,
-                                cy,
-                                if press { 'M' } else { 'm' }
-                            )
-                        } else {
-                            let cb = btn + 32 + if press { 0 } else { 3 };
-                            format!(
-                                "\x1b[M{}{}{}",
-                                cb as char,
-                                (cx + 32) as u8 as char,
-                                (cy + 32) as u8 as char
-                            )
-                        };
-                        let _ = self.pty_tx.try_send(seq.into_bytes());
+                if let Some(session) = self.sessions.get(&self.active_id) {
+                    if session.grid.mouse_reporting {
+                        if let Some(r) = &self.renderer {
+                            let (cw, ch) = r.cell_size();
+                            let cx = (self.cursor_pos_px.0 / cw as f64) as u16 + 1;
+                            let cy = (self.cursor_pos_px.1 / ch as f64) as u16 + 1;
+                            let btn = match button {
+                                winit::event::MouseButton::Left => 0u8,
+                                winit::event::MouseButton::Middle => 1,
+                                winit::event::MouseButton::Right => 2,
+                                _ => 3,
+                            };
+                            let press = state == ES::Pressed;
+                            let seq = if session.grid.mouse_sgr {
+                                format!(
+                                    "\x1b[<{};{};{}{}",
+                                    btn,
+                                    cx,
+                                    cy,
+                                    if press { 'M' } else { 'm' }
+                                )
+                            } else {
+                                let cb = btn + 32 + if press { 0 } else { 3 };
+                                format!(
+                                    "\x1b[M{}{}{}",
+                                    cb as char,
+                                    (cx + 32) as u8 as char,
+                                    (cy + 32) as u8 as char
+                                )
+                            };
+                            let _ = session.pty.pty_tx.try_send(seq.into_bytes());
+                        }
                     }
                 }
             }
@@ -204,13 +385,15 @@ impl ApplicationHandler for GunterApp {
                 self.cursor_pos_px = (position.x, position.y);
                 if self.mouse_pressed {
                     if let Some(r) = &self.renderer {
-                        let (cw, ch) = r.cell_size();
-                        let cx = (position.x / cw as f64) as u16;
-                        let cy = (position.y / ch as f64) as u16;
-                        self.selection_end = Some((
-                            cx.min(self.grid.cols - 1),
-                            cy.min(self.grid.rows - 1),
-                        ));
+                        if let Some(session) = self.sessions.get(&self.active_id) {
+                            let (cw, ch) = r.cell_size();
+                            let cx = (position.x / cw as f64) as u16;
+                            let cy = (position.y / ch as f64) as u16;
+                            self.selection_end = Some((
+                                cx.min(session.grid.cols - 1),
+                                cy.min(session.grid.rows - 1),
+                            ));
+                        }
                     }
                 }
             }
@@ -223,22 +406,28 @@ impl ApplicationHandler for GunterApp {
                         let cols = (size.width as f32 / cw) as u16;
                         let rows = (size.height as f32 / ch) as u16;
                         if cols > 0 && rows > 0 {
-                            let _ = self.pty_resize_tx.try_send((cols, rows));
-                            self.grid.resize(cols, rows);
+                            if let Some(session) = self.sessions.get_mut(&self.active_id) {
+                                let _ = session.pty.pty_resize_tx.try_send((cols, rows));
+                                session.grid.resize(cols, rows);
+                            }
                         }
                     }
                 }
             }
 
             WindowEvent::RedrawRequested => {
-                while let Ok(bytes) = self.pty_rx.try_recv() {
-                    let mut perf = GridPerformer::new(&mut self.grid);
-                    for &b in &bytes {
-                        self.parser.advance(&mut perf, b);
+                for (_, session) in &mut self.sessions {
+                    while let Ok(bytes) = session.pty.pty_rx.try_recv() {
+                        let mut perf = GridPerformer::new(&mut session.grid);
+                        for &b in &bytes {
+                            session.parser.advance(&mut perf, b);
+                        }
                     }
                 }
                 if let Some(r) = &mut self.renderer {
-                    r.render(&mut self.grid);
+                    if let Some(session) = self.sessions.get_mut(&self.active_id) {
+                        r.render(&mut session.grid);
+                    }
                 }
             }
 
@@ -292,58 +481,20 @@ fn translate_key(event: &winit::event::KeyEvent) -> Option<Vec<u8>> {
 fn main() {
     env_logger::init();
 
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
-    let (key_tx, key_rx) = mpsc::sync_channel::<Vec<u8>>(64);
-    let (resize_tx, resize_rx) = mpsc::sync_channel::<(u16, u16)>(4);
-
-    std::thread::spawn(move || {
-        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-        use std::io::{Read, Write};
-
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize { rows: ROWS, cols: COLS, pixel_width: 0, pixel_height: 0 })
-            .expect("openpty failed");
-
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-        let cmd = CommandBuilder::new(&shell);
-        let _child = pair.slave.spawn_command(cmd).expect("spawn shell");
-        drop(pair.slave);
-
-        let mut writer = pair.master.take_writer().expect("take writer");
-        let mut reader = pair.master.try_clone_reader().expect("clone reader");
-
-        std::thread::spawn(move || {
-            while let Ok(bytes) = key_rx.recv() {
-                let _ = writer.write_all(&bytes);
-            }
-        });
-
-        let mut buf = [0u8; 4096];
-        loop {
-            while let Ok((cols, rows)) = resize_rx.try_recv() {
-                let _ = pair.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
-            }
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
+    let initial_id = Uuid::new_v4();
+    let initial_session = SessionState::new(COLS, ROWS);
+    let mut sessions = HashMap::new();
+    sessions.insert(initial_id, initial_session);
 
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = GunterApp {
         window: None,
         renderer: None,
-        grid: Grid::new(COLS, ROWS),
-        pty_rx: rx,
-        pty_tx: key_tx,
-        pty_resize_tx: resize_tx,
-        parser: vte::Parser::new(),
+        sessions,
+        layout: Layout::leaf(initial_id),
+        active_id: initial_id,
+        tab_layouts: Vec::new(),
+        active_tab: 0,
         modifiers: winit::event::Modifiers::default(),
         selection_start: None,
         selection_end: None,
