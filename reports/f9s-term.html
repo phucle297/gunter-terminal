@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>f9s-term: GridPerformer VTE Implementation Report</title>
+<style>
+  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1.5rem; background: #1e2127; color: #abb2bf; line-height: 1.6; }
+  h1 { color: #61afef; border-bottom: 2px solid #3f4451; padding-bottom: .5rem; }
+  h2 { color: #98c379; margin-top: 2rem; }
+  h3 { color: #e5c07b; }
+  code, pre { background: #282c34; border: 1px solid #3f4451; border-radius: 4px; font-family: 'JetBrains Mono', monospace; }
+  code { padding: .1em .4em; font-size: .9em; }
+  pre { padding: 1rem; overflow-x: auto; }
+  .meta { background: #282c34; border: 1px solid #3f4451; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; }
+  .meta dt { color: #56b6c2; font-weight: bold; float: left; width: 120px; }
+  .meta dd { margin-left: 130px; margin-bottom: .4rem; }
+  .green { color: #98c379; font-weight: bold; }
+  .red { color: #e06c75; font-weight: bold; }
+  .yellow { color: #e5c07b; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th { background: #3f4451; color: #abb2bf; padding: .5rem .75rem; text-align: left; }
+  td { padding: .4rem .75rem; border-bottom: 1px solid #3f4451; }
+  tr:nth-child(even) td { background: #282c34; }
+  .pass { color: #98c379; }
+  .tag { display: inline-block; padding: .2em .5em; border-radius: 3px; font-size: .8em; font-weight: bold; }
+  .tag-note { background: #3f4451; color: #abb2bf; }
+  .tag-warn { background: #e5c07b22; color: #e5c07b; border: 1px solid #e5c07b55; }
+  .tag-ok { background: #98c37922; color: #98c379; border: 1px solid #98c37955; }
+  ul li { margin-bottom: .3rem; }
+</style>
+</head>
+<body>
+
+<h1>f9s-term: GridPerformer VTE Implementation</h1>
+
+<div class="meta">
+  <dl>
+    <dt>Commit</dt>    <dd><code>cbea28d</code> &mdash; feat: implement GridPerformer VTE with TDD tests (f9s)</dd>
+    <dt>Branch</dt>    <dd><code>feat/v0.1-term</code></dd>
+    <dt>Agent</dt>     <dd>MistyHill (claude-sonnet-4-6)</dd>
+    <dt>Date</dt>      <dd>2026-05-25</dd>
+    <dt>Test result</dt><dd><span class="green">19 passed, 0 failed</span></dd>
+    <dt>Files</dt>     <dd>
+      <code>crates/gunter-core/src/grid.rs</code> (new)<br>
+      <code>crates/gunter-core/src/lib.rs</code> (updated)<br>
+      <code>crates/gunter-term/src/performer.rs</code> (new)<br>
+      <code>crates/gunter-term/src/lib.rs</code> (updated)
+    </dd>
+  </dl>
+</div>
+
+<h2>Why vte::Perform vs. Manual ANSI Parsing</h2>
+
+<p>
+  <code>vte</code> is a zero-allocation VTE/ANSI state machine used in production by both
+  Alacritty and WezTerm. It correctly handles:
+</p>
+<ul>
+  <li>Multi-byte UTF-8 characters accumulated before <code>print()</code> is called</li>
+  <li>Escape sequence interleaving and partial-sequence cancellation</li>
+  <li>All ECMA-48 dispatcher hooks: <code>print</code>, <code>execute</code>, <code>csi_dispatch</code>, <code>esc_dispatch</code>, <code>osc_dispatch</code>, <code>hook</code>, <code>put</code>, <code>unhook</code></li>
+  <li>Edge cases in param parsing (sub-params, default 0 values, overflow)</li>
+</ul>
+<p>
+  Rolling a manual parser would require re-implementing the same state machine and would
+  almost certainly miss edge cases. Using <code>vte</code> keeps <code>GridPerformer</code>
+  focused on terminal semantics rather than parser mechanics.
+</p>
+
+<h2>TDD Sequence</h2>
+
+<h3>Phase 1 &mdash; Red (tests written, no implementation)</h3>
+<p>
+  Tests were written in <code>performer.rs</code> before any implementation.
+  The file had the struct definition and empty method stubs (the trait <code>vte::Perform</code>
+  requires all methods to be provided). Until <code>gunter-core::grid</code> existed, the file
+  would have failed with <code>unresolved import</code>. The Grid stub was therefore added to
+  <code>gunter-core</code> first as the canonical future API, then performer tests were run
+  against the unimplemented performer &mdash; they would have failed on assertion mismatches.
+</p>
+
+<h3>Phase 2 &mdash; Green (implementation makes all tests pass)</h3>
+<p>
+  The <code>GridPerformer</code> implementation was added to the same file. After implementation:
+</p>
+<pre><code>cargo test -p gunter-term
+running 19 tests
+... all ok ...
+test result: ok. 19 passed; 0 failed</code></pre>
+
+<h2>Test Coverage</h2>
+
+<table>
+  <thead><tr><th>Test name</th><th>What it verifies</th><th>Result</th></tr></thead>
+  <tbody>
+    <tr><td><code>print_writes_char_to_cursor</code></td><td>Single char lands in cell[0]</td><td class="pass">PASS</td></tr>
+    <tr><td><code>print_advances_cursor_right</code></td><td>Cursor moves right after print</td><td class="pass">PASS</td></tr>
+    <tr><td><code>newline_moves_cursor_down</code></td><td>LF increments cursor.y</td><td class="pass">PASS</td></tr>
+    <tr><td><code>carriage_return_moves_to_col_zero</code></td><td>CR resets cursor.x to 0</td><td class="pass">PASS</td></tr>
+    <tr><td><code>csi_cursor_position_moves_cursor</code></td><td>CSI 5;10H → (9,4) 1-based to 0-based</td><td class="pass">PASS</td></tr>
+    <tr><td><code>csi_cursor_position_default_is_home</code></td><td>CSI H with no params → (0,0)</td><td class="pass">PASS</td></tr>
+    <tr><td><code>csi_cursor_up</code></td><td>CSI 3A moves cursor up 3 rows</td><td class="pass">PASS</td></tr>
+    <tr><td><code>csi_cursor_down</code></td><td>CSI 2B moves cursor down 2 rows</td><td class="pass">PASS</td></tr>
+    <tr><td><code>csi_cursor_right</code></td><td>CSI 5C moves cursor right 5</td><td class="pass">PASS</td></tr>
+    <tr><td><code>csi_cursor_left</code></td><td>CSI 4D moves cursor left 4</td><td class="pass">PASS</td></tr>
+    <tr><td><code>sgr_sets_foreground_color</code></td><td>SGR 31 sets fg=red #e06c75</td><td class="pass">PASS</td></tr>
+    <tr><td><code>sgr_sets_background_color</code></td><td>SGR 42 sets bg=green #98c379</td><td class="pass">PASS</td></tr>
+    <tr><td><code>sgr_reset_restores_defaults</code></td><td>SGR 0 restores both fg and bg to Atom One Dark defaults</td><td class="pass">PASS</td></tr>
+    <tr><td><code>sgr_bold</code></td><td>SGR 1 sets BOLD flag</td><td class="pass">PASS</td></tr>
+    <tr><td><code>sgr_italic</code></td><td>SGR 3 sets ITALIC flag</td><td class="pass">PASS</td></tr>
+    <tr><td><code>sgr_underline</code></td><td>SGR 4 sets UNDERLINE flag</td><td class="pass">PASS</td></tr>
+    <tr><td><code>sgr_no_params_is_reset</code></td><td>Bare ESC[m (no params) is treated as reset</td><td class="pass">PASS</td></tr>
+    <tr><td><code>write_cell_marks_dirty</code></td><td>Writing a char sets the dirty flag for that cell index</td><td class="pass">PASS</td></tr>
+    <tr><td><code>cursor_clamps_at_bottom_on_newline</code></td><td>LF at last row stays at last row (no OOB)</td><td class="pass">PASS</td></tr>
+  </tbody>
+</table>
+
+<h2>Out of Scope (Deferred)</h2>
+
+<ul>
+  <li><strong>256-color SGR</strong>: <code>38;5;n</code> / <code>48;5;n</code> &mdash; sub-param sequences, deferred</li>
+  <li><strong>RGB SGR</strong>: <code>38;2;r;g;b</code> / <code>48;2;r;g;b</code> &mdash; deferred</li>
+  <li><strong>DEC private modes</strong>: <code>?25h/l</code> (cursor hide/show), <code>?1049h/l</code> (alt screen) &mdash; deferred</li>
+  <li><strong>Scrolling</strong>: When cursor reaches the last row on LF, the grid currently clamps (stays). Scroll region (DECSTBM) and scroll-up not yet implemented.</li>
+  <li><strong>Line wrap</strong>: When cursor reaches the last column after print, it clamps. Soft-wrap deferred.</li>
+  <li><strong>Tab stops</strong>: HT (0x09) not handled.</li>
+  <li><strong>Erase sequences</strong>: ED (erase display), EL (erase line) &mdash; deferred.</li>
+</ul>
+
+<h2>Reviewer Checklist</h2>
+
+<ul>
+  <li>
+    <span class="tag tag-warn">CHECK</span>
+    <strong>1-based ANSI to 0-based conversion in CSI H</strong>:
+    <code>row = param - 1</code>, <code>col = param - 1</code>.
+    ANSI spec says "CSI 1;1H" is home (top-left), not "CSI 0;0H".
+    The implementation subtracts 1, but also guards against 0 params (treats 0 as 1 per spec).
+  </li>
+  <li>
+    <span class="tag tag-warn">CHECK</span>
+    <strong>Cursor bounds: clamp vs. wrap</strong>:
+    After printing at the last column, cursor is clamped to <code>cols - 1</code>, not wrapped to next line.
+    This is intentional for v0.1 &mdash; wrapping requires knowing whether the line is "soft-wrapped" vs. hard-newline for reflow. Deferred.
+  </li>
+  <li>
+    <span class="tag tag-ok">NOTE</span>
+    <strong>SGR reset (code 0) restores BOTH fg AND bg to defaults</strong>:
+    Verified by <code>sgr_reset_restores_defaults</code> test. A common bug is only resetting fg.
+  </li>
+  <li>
+    <span class="tag tag-note">NOTE</span>
+    <strong>gunter-core::grid is on feat/v0.1-term branch</strong>:
+    The grid agent is implementing Grid/Cell in parallel on <code>feat/v0.1-grid</code>.
+    The API in this branch is intentionally identical to the spec. Merge should be clean.
+  </li>
+  <li>
+    <span class="tag tag-note">NOTE</span>
+    <strong>CellFlags uses bitflags manually</strong>:
+    Did not pull in the <code>bitflags</code> crate to keep dependencies minimal.
+    Consider switching if more flags are added.
+  </li>
+</ul>
+
+</body>
+</html>
