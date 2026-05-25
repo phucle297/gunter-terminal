@@ -18,3 +18,4 @@ pollster = { workspace = true }
 env_logger = { workspace = true }
 arboard = { workspace = true }
 uuid = { workspace = true }
+notify = { workspace = true }

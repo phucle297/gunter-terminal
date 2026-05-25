@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc;
 
+use gunter_core::config::Config;
 use gunter_core::grid::Grid;
 use gunter_core::layout::{Axis, Layout, Rect};
 use gunter_renderer::GunterRenderer;
@@ -30,9 +31,18 @@ struct SessionState {
 
 impl SessionState {
     fn new(cols: u16, rows: u16) -> Self {
+        Self::new_with_shell(cols, rows, None, &[])
+    }
+
+    fn new_with_shell(cols: u16, rows: u16, shell_program: Option<&str>, shell_args: &[String]) -> Self {
         let (pty_out_tx, pty_out_rx) = mpsc::channel::<Vec<u8>>();
         let (key_tx, key_rx) = mpsc::sync_channel::<Vec<u8>>(64);
         let (resize_tx, resize_rx) = mpsc::sync_channel::<(u16, u16)>(4);
+
+        let shell = shell_program
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
+        let args: Vec<String> = shell_args.to_vec();
 
         std::thread::spawn(move || {
             use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -43,8 +53,9 @@ impl SessionState {
                 .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
                 .expect("openpty failed");
 
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-            let _child = pair.slave.spawn_command(CommandBuilder::new(&shell)).expect("spawn shell");
+            let mut cmd = CommandBuilder::new(&shell);
+            for arg in &args { cmd.arg(arg); }
+            let _child = pair.slave.spawn_command(cmd).expect("spawn shell");
             drop(pair.slave);
 
             let mut writer = pair.master.take_writer().expect("take writer");
@@ -102,6 +113,8 @@ struct GunterApp {
     selection_end: Option<(u16, u16)>,
     cursor_pos_px: (f64, f64),
     mouse_pressed: bool,
+    config: Config,
+    config_rx: mpsc::Receiver<()>,
 }
 
 impl GunterApp {
@@ -436,6 +449,14 @@ impl ApplicationHandler for GunterApp {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Hot reload: apply config changes if watcher fired
+        if self.config_rx.try_recv().is_ok() {
+            self.config.reload();
+            // Mark all grids dirty so renderer picks up any theme/font changes
+            for (_, session) in &mut self.sessions {
+                session.grid.mark_all_dirty();
+            }
+        }
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -478,11 +499,44 @@ fn translate_key(event: &winit::event::KeyEvent) -> Option<Vec<u8>> {
     }
 }
 
+fn start_config_watcher(tx: mpsc::SyncSender<()>) {
+    use notify::{EventKind, RecursiveMode, Watcher};
+    let Some(path) = gunter_core::config::config_path() else { return };
+    if !path.exists() { return; }
+    std::thread::spawn(move || {
+        let (watch_tx, watch_rx) = mpsc::channel();
+        let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(ev) = res {
+                match ev.kind {
+                    EventKind::Modify(_) | EventKind::Create(_) => { let _ = watch_tx.send(()); }
+                    _ => {}
+                }
+            }
+        }) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        if watcher.watch(&path, RecursiveMode::NonRecursive).is_err() { return; }
+        loop {
+            if watch_rx.recv().is_err() { break; }
+            let _ = tx.try_send(());
+        }
+    });
+}
+
 fn main() {
     env_logger::init();
 
+    let config = Config::load();
+    let (cfg_tx, cfg_rx) = mpsc::sync_channel::<()>(4);
+    start_config_watcher(cfg_tx);
+
     let initial_id = Uuid::new_v4();
-    let initial_session = SessionState::new(COLS, ROWS);
+    let initial_session = SessionState::new_with_shell(
+        COLS, ROWS,
+        Some(&config.shell.program),
+        &config.shell.args,
+    );
     let mut sessions = HashMap::new();
     sessions.insert(initial_id, initial_session);
 
@@ -500,6 +554,8 @@ fn main() {
         selection_end: None,
         cursor_pos_px: (0.0, 0.0),
         mouse_pressed: false,
+        config,
+        config_rx: cfg_rx,
     };
     event_loop.run_app(&mut app).expect("run_app");
 }
