@@ -19,3 +19,4 @@ env_logger = { workspace = true }
 arboard = { workspace = true }
 uuid = { workspace = true }
 notify = { workspace = true }
+libc = { workspace = true }

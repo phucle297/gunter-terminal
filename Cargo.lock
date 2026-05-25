@@ -846,6 +846,7 @@ dependencies = [
  "gunter-core",
  "gunter-renderer",
  "gunter-term",
+ "libc",
  "notify",
  "pollster",
  "portable-pty",

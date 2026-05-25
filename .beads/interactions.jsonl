@@ -13,3 +13,4 @@
 {"id":"int-3a4dfc88","kind":"field_change","created_at":"2026-05-25T17:08:59.027650834Z","actor":"PerMees","issue_id":"gunter-terminal-bg6","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-1e48b40e","kind":"field_change","created_at":"2026-05-25T17:08:59.639669385Z","actor":"PerMees","issue_id":"gunter-terminal-mst","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
 {"id":"int-28d9cf8f","kind":"field_change","created_at":"2026-05-25T17:09:00.267740849Z","actor":"PerMees","issue_id":"gunter-terminal-u49","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-bce760a8","kind":"field_change","created_at":"2026-05-25T17:17:17.05848465Z","actor":"PerMees","issue_id":"gunter-terminal-y5w","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
