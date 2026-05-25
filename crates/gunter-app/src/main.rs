@@ -315,6 +315,32 @@ impl ApplicationHandler for GunterApp {
                             }
                             return;
                         }
+                        // Ctrl+arrows — send modifier sequences
+                        let ctrl_arrow: Option<&[u8]> = match &event.logical_key {
+                            Key::Named(NamedKey::ArrowUp)    => Some(b"\x1b[1;5A"),
+                            Key::Named(NamedKey::ArrowDown)  => Some(b"\x1b[1;5B"),
+                            Key::Named(NamedKey::ArrowRight) => Some(b"\x1b[1;5C"),
+                            Key::Named(NamedKey::ArrowLeft)  => Some(b"\x1b[1;5D"),
+                            _ => None,
+                        };
+                        if let Some(seq) = ctrl_arrow {
+                            if let Some(session) = self.sessions.get(&self.active_id) {
+                                let _ = session.pty.pty_tx.try_send(seq.to_vec());
+                            }
+                            return;
+                        }
+                        // Ctrl+letter — translate to control character (fallback for platforms
+                        // where winit does not apply Ctrl in logical_key)
+                        if let Key::Character(s) = &event.logical_key {
+                            let ch = s.chars().next().unwrap_or('\0').to_ascii_lowercase();
+                            if ch >= 'a' && ch <= 'z' {
+                                let byte = (ch as u8) - b'a' + 1;
+                                if let Some(session) = self.sessions.get(&self.active_id) {
+                                    let _ = session.pty.pty_tx.try_send(vec![byte]);
+                                }
+                                return;
+                            }
+                        }
                     }
                     if let Some(bytes) = translate_key(&event) {
                         if let Some(session) = self.sessions.get(&self.active_id) {

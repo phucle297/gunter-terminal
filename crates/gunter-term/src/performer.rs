@@ -50,6 +50,16 @@ impl<'a> GridPerformer<'a> {
     fn blank(&self) -> Cell {
         Cell { ch: ' ', fg: self.fg, bg: self.bg, flags: CellFlags::NONE }
     }
+
+    fn advance_line(&mut self) {
+        let y = self.grid.cursor.1;
+        let bot = self.grid.scroll_bot;
+        if y >= bot {
+            self.grid.scroll_up(1);
+        } else {
+            self.grid.cursor.1 = y + 1;
+        }
+    }
 }
 
 impl<'a> vte::Perform for GridPerformer<'a> {
@@ -62,32 +72,29 @@ impl<'a> vte::Perform for GridPerformer<'a> {
             bg: self.bg,
             flags: self.flags,
         });
-        // Advance cursor, clamping at last column (no wrap for now).
         let next_x = x + 1;
         if next_x < self.grid.cols {
             self.grid.cursor.0 = next_x;
         } else {
-            // Stay on last column rather than wrapping off-screen.
-            self.grid.cursor.0 = self.grid.cols - 1;
+            self.grid.cursor.0 = 0;
+            self.advance_line();
         }
     }
 
     /// C0/C1 control characters.
     fn execute(&mut self, byte: u8) {
         match byte {
-            b'\n' => {
-                let y = self.grid.cursor.1;
-                let next_y = y + 1;
-                if next_y < self.grid.rows {
-                    self.grid.cursor.1 = next_y;
-                } else {
-                    // At bottom — stay (scroll not yet implemented).
-                    self.grid.cursor.1 = self.grid.rows - 1;
-                }
+            b'\n' | b'\x0b' | b'\x0c' => {
+                self.advance_line();
             }
             b'\r' => {
                 self.grid.cursor.0 = 0;
             }
+            b'\x08' => {
+                let x = self.grid.cursor.0;
+                self.grid.cursor.0 = x.saturating_sub(1);
+            }
+            b'\x07' => {} // BEL — ignore
             _ => {}
         }
     }
@@ -601,13 +608,32 @@ mod tests {
     }
 
     #[test]
-    fn cursor_clamps_at_bottom_on_newline() {
+    fn newline_at_bottom_scrolls() {
         let mut grid = make_grid();
-        grid.cursor_move(0, 23); // last row
+        // write 'A' at row 0 col 0, move to last row, then newline → scroll
+        grid.write_cell(0, 0, Cell { ch: 'A', fg: DEFAULT_FG, bg: DEFAULT_BG, flags: CellFlags::NONE });
+        grid.cursor_move(0, 23);
         let mut p = GridPerformer::new(&mut grid);
         let mut parser = vte::Parser::new();
         for b in b"\n" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cursor.1, 23); // stays at last row
+        // cursor stays on last row, content scrolled up
+        assert_eq!(grid.cursor.1, 23);
+        // row 0 scrolled out: first cell is what was row 1 (blank)
+        assert_eq!(grid.cells[0].ch, ' ');
+    }
+
+    #[test]
+    fn print_wraps_at_end_of_line() {
+        let mut grid = Grid::new(4, 3);
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // 5 chars on a 4-col grid: should wrap
+        for b in b"ABCDE" { parser.advance(&mut p, *b); }
+        // row 0: ABCD, row 1: E
+        assert_eq!(grid.cells[0].ch, 'A');
+        assert_eq!(grid.cells[3].ch, 'D');
+        assert_eq!(grid.cells[4].ch, 'E');
+        assert_eq!(grid.cursor, (1, 1));
     }
 
     #[test]
