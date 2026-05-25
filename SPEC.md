@@ -25,6 +25,7 @@
 | `portable-pty`   | PTY allocation on Windows, macOS, Linux             |
 | `tokio`          | Async runtime, `mpsc` channels between layers       |
 | `wezterm-font`   | Glyph rasterization + atlas (vendored from WezTerm) |
+| `arboard`        | Clipboard read/write (copy/paste)                   |
 | `serde` + `toml` | Config file parsing                                 |
 | `notify`         | Config hot-reload via filesystem watch              |
 | `uuid`           | Session IDs                                         |
@@ -138,20 +139,29 @@ pub struct Grid {
     pub cells: Vec<Cell>,
     pub scrollback: VecDeque<Vec<Cell>>,
     pub cursor: (u16, u16),
-    pub dirty: Vec<bool>,   // per-cell dirty flag — set on write, cleared after render; serves as the frame diff
+    pub dirty: Vec<bool>,        // per-cell dirty flag — set on write, cleared after render; serves as the frame diff
+    pub scroll_top: u16,         // DECSTBM top margin (0-indexed)
+    pub scroll_bot: u16,         // DECSTBM bottom margin (inclusive)
+    pub cursor_visible: bool,
 }
+
+// Required methods:
+// fn scroll_up(&mut self, n: u16)   — push rows to scrollback, shift up within scroll region
+// fn scroll_down(&mut self, n: u16) — shift down within scroll region
 ```
 
 ### `gunter-core/src/session.rs`
 
 ```rust
 pub struct Session {
-    pub id:      Uuid,
-    pub pty:     Box<dyn MasterPty + Send>,
-    pub grid:    Grid,
-    pub parser:  vte::Parser,
-    pub tx:      mpsc::Sender<Vec<u8>>,   // keystrokes → PTY stdin
-    pub rect:    Rect,                    // pixel rect in window
+    pub id:          Uuid,
+    pub pty:         Box<dyn MasterPty + Send>,
+    pub grid:        Grid,
+    pub alt_grid:    Grid,    // alternate screen — swapped on CSI ?1049h/l
+    pub parser:      vte::Parser,
+    pub tx:          mpsc::Sender<Vec<u8>>,   // keystrokes → PTY stdin
+    pub rect:        Rect,                    // pixel rect in window
+    pub alt_active:  bool,
 }
 ```
 
@@ -171,7 +181,7 @@ pub enum Axis { Horizontal, Vertical }
 
 ## Build Phases
 
-### Phase 1 — Shell in a window (no GPU)
+### Phase 1 — PTY + VTE grid ✅ Done
 
 **Goal:** type a command in WSL and see ASCII output.
 
@@ -212,13 +222,67 @@ fn main() {
 }
 ```
 
-**Exit condition:** `echo hello` in WSL prints "hello" in the grid buffer.
+**Exit condition:** `echo hello` in WSL prints "hello" in the grid buffer. ✅
 
 ---
 
-### Phase 2 — GPU renderer
+### Phase 2 — Interactive Core
 
-**Goal:** render the grid at 60fps, `ComicShannsMono Nerd Font Mono`, Atom One Dark colors.
+**Goal:** user can type in shell, prompt renders correctly, vim opens without corruption.
+
+#### Keyboard → PTY write
+
+Handle `WindowEvent::KeyboardInput` (winit) and write to `pair.master.try_clone_writer()`.
+
+Key translation table:
+
+| Key | Bytes written |
+|-----|---------------|
+| Printable chars | UTF-8 bytes |
+| Enter | `\r` |
+| Backspace | `\x7f` |
+| Tab | `\x09` |
+| Ctrl+A..Z | `\x01`..\x1a` |
+| Arrow Up/Down/Left/Right | `\x1b[A` / `\x1b[B` / `\x1b[C` / `\x1b[D` |
+| Ctrl+Arrow Up/Down/Left/Right | `\x1b[1;5A` / `\x1b[1;5B` / `\x1b[1;5C` / `\x1b[1;5D` |
+| F1–F12 | standard xterm sequences |
+| Home, End, PgUp, PgDn, Delete | standard xterm sequences |
+
+#### Required VTE sequences — minimum for shell usability
+
+Add to `GridPerformer` CSI dispatch:
+
+| Sequence | Action |
+|----------|--------|
+| `CSI J` / `0J` | Erase cursor→end of display |
+| `CSI 1J` | Erase start→cursor |
+| `CSI 2J` / `3J` | Erase entire display (clear screen) |
+| `CSI K` / `0K` | Erase cursor→end of line |
+| `CSI 1K` | Erase start of line→cursor |
+| `CSI 2K` | Erase entire line |
+| `CSI r` (DECSTBM) | Set scroll region top/bottom → `grid.scroll_top` / `grid.scroll_bot` |
+| `CSI S` | Scroll up N lines |
+| `CSI T` | Scroll down N lines |
+| `CSI L` | Insert N lines |
+| `CSI M` | Delete N lines |
+| `CSI @` | Insert N chars |
+| `CSI P` | Delete N chars (DCH) |
+| `CSI X` | Erase N chars (ECH) |
+| `CSI ?1049h` / `CSI ?1049l` | Enter / exit alternate screen |
+| `CSI ?25h` / `CSI ?25l` | Show / hide cursor → `grid.cursor_visible` |
+| `CSI ?2004h` / `CSI ?2004l` | Enable / disable bracketed paste |
+
+#### PTY resize
+
+On `WindowEvent::Resized`: compute new `(cols, rows)` from `pixel_size / cell_size`, then call `pair.master.resize(PtySize { cols, rows, .. })`.
+
+**Exit condition:** `bash`/`fish`/`zsh` prompt renders without garbage, `vim` opens and renders correctly.
+
+---
+
+### Phase 3 — GPU Renderer + Font
+
+**Goal:** render the grid at 60fps, `ComicShannsMono Nerd Font Mono`, Atom One Dark colors, cursor visible.
 
 Pipeline:
 
@@ -234,7 +298,7 @@ Steps:
 1. Init `winit::Window` + `wgpu::Instance` → `wgpu::Surface`
 2. Build glyph atlas: rasterize each char once with `wezterm-font`, pack into a `wgpu::Texture`
 3. Store UV rect per glyph in a `HashMap<(char, CellFlags), UvRect>`
-4. Each frame: walk dirty cells only, build `Vec<GlyphInstance>`, upload, draw
+4. Each frame: walk dirty cells only, build `Vec<GlyphInstance>`, upload, draw; clear dirty after render
 5. Two render passes: background quads first (colored rects), then glyph quads on top
 
 Glyph instance layout for WGSL shader:
@@ -251,11 +315,35 @@ pub struct GlyphInstance {
 }
 ```
 
-**Exit condition:** WSL prompt renders in ComicShannsMono with correct Atom One Dark colors.
+Additional pieces required:
+
+- **`wezterm-font` instead of `fontdue`** — proper Nerd Font glyph support, font fallback chain, correct metrics
+- **Truecolor SGR** — `38;2;r;g;b` / `48;2;r;g;b` in performer; `Cell.fg/bg: Color` already exists, add SGR parsing
+- **256-color SGR** — `38;5;n` / `48;5;n` — map via xterm-256 palette
+- **Bright color SGR** — `90–97` fg, `100–107` bg
+- **Cursor rendering** — extra quad at `grid.cursor` position, color from theme `cursor`, style from `DECSCUSR` (block/bar/underline)
+- **Dirty-only upload** — skip instances where `!grid.dirty[i]`; clear dirty after render
+
+**Exit condition:** WSL prompt renders in ComicShannsMono with correct Atom One Dark colors, Nerd Font icons visible, cursor visible as block.
 
 ---
 
-### Phase 3 — Pane splits and tabs
+### Phase 4 — Input Complete + Clipboard
+
+**Goal:** copy/paste works, mouse scrolls history, modifier keys work in vim.
+
+- **Full modifier keyboard:** Ctrl+arrows → `\x1b[1;5A` etc., Alt+key → `\x1b` + key byte, Shift+F-keys
+- **Mouse scroll wheel** → scroll through scrollback buffer (no PTY write needed, just offset render)
+- **Text selection:** mouse drag → mark cell range, `Ctrl+Shift+C` → copy to clipboard via `arboard` crate
+- **Paste:** `Ctrl+Shift+V` → get clipboard string → if `?2004h` active wrap in `\x1b[200~...\x1b[201~`, write to PTY
+- **Mouse reporting:** when shell enables `?1000h`/`?1006h`, encode mouse events as `\x1b[<btn;col;rowM/m` and write to PTY (needed for vim mouse, fzf)
+- **Scrollback render:** when scroll offset > 0, render from `scrollback` buffer not live grid
+
+**Exit condition:** can copy text with mouse + `Ctrl+Shift+C`, paste with `Ctrl+Shift+V`, vim mouse works, scrollback navigable.
+
+---
+
+### Phase 5 — Multiplexing
 
 **Goal:** `Ctrl+Shift+H` / `Ctrl+Shift+V` splits panes; `Ctrl+Shift+T` opens a new tab.
 
@@ -288,7 +376,29 @@ fn reflow(layout: &Layout, rect: Rect, sessions: &mut HashMap<Uuid, Session>) {
 
 ---
 
-### Phase 4 — Multi-shell and socket server
+### Phase 6 — Config + Hot Reload
+
+**Goal:** all behaviour driven by `~/.config/gunter/config.toml`, changes apply without restart.
+
+1. Load config at startup with `serde` + `toml`
+2. Watch config file with `notify` crate
+3. On change event: re-parse, diff against current config
+4. Apply only the changed fields (theme swap reloads color uniforms in wgpu; font change rebuilds atlas)
+
+Font fallback chain (for Nerd Font glyphs + CJK):
+
+```toml
+[font]
+family   = "ComicShannsMono Nerd Font Mono"
+fallback = ["Noto Sans CJK", "Segoe UI Emoji"]
+size     = 14.0
+```
+
+**Exit condition:** change `size = 18.0` in config, Gunter redraws at new size without restart.
+
+---
+
+### Phase 7 — Socket Server (stretch)
 
 **Goal:** open a pane with PowerShell or CMD; let external tools (Neovim, VS Code) attach to a Gunter session.
 
@@ -311,42 +421,23 @@ This means Neovim running inside WSL can call `gunter attach <id>` and get a ful
 
 ---
 
-### Phase 5 — Config, keybinds, hot reload
-
-**Goal:** all behaviour driven by `~/.config/gunter/config.toml`, changes apply without restart.
-
-1. Load config at startup with `serde` + `toml`
-2. Watch config file with `notify` crate
-3. On change event: re-parse, diff against current config
-4. Apply only the changed fields (theme swap reloads color uniforms in wgpu; font change rebuilds atlas)
-
-Font fallback chain (for Nerd Font glyphs + CJK):
-
-```toml
-[font]
-family   = "ComicShannsMono Nerd Font Mono"
-fallback = ["Noto Sans CJK", "Segoe UI Emoji"]
-size     = 14.0
-```
-
-**Exit condition:** change `size = 18.0` in config, Gunter redraws at new size without restart.
-
----
-
 ## Phase Summary
 
-| Phase | Deliverable                        | Key crates                      | Complexity |
-| ----- | ---------------------------------- | ------------------------------- | ---------- |
-| 1     | WSL shell → grid buffer            | `portable-pty`, `vte`, `tokio`  | Low        |
-| 2     | GPU renderer, fonts, Atom One Dark | `wgpu`, `winit`, `wezterm-font` | High       |
-| 3     | Pane splits, tabs                  | internal layout tree            | Medium     |
-| 4     | Multi-shell, socket server         | `tokio::net`                    | Medium     |
-| 5     | Config, hot reload                 | `serde`, `toml`, `notify`       | Low        |
+| Phase | Deliverable | Key crates | Complexity | Status |
+|-------|-------------|------------|------------|--------|
+| 1 | PTY + VTE grid | `portable-pty`, `vte` | Low | ✅ Done |
+| 2 | Interactive core — keyboard + critical VTE + PTY resize | internal | Medium | 🔲 |
+| 3 | GPU renderer — wgpu + wezterm-font + cursor + colors | `wgpu`, `winit`, `wezterm-font` | High | 🔲 (partial) |
+| 4 | Input complete — mouse, clipboard, scrollback nav | `arboard` | Medium | 🔲 |
+| 5 | Multiplexing — pane splits, tabs | internal | Medium | 🔲 |
+| 6 | Config + hot reload | `serde`, `toml`, `notify` | Low | 🔲 |
+| 7 | Socket server (stretch) | `tokio::net` | Medium | 🔲 |
 
 ---
 
 ## Implementation Notes
 
+- **Complete Phase 2 before Phase 3** — the renderer draws whatever the grid contains; if the grid is wrong due to missing VTE sequences, the GPU just renders the wrong content faster.
 - **Start with Phase 1 before touching the GPU.** The PTY → vte → Grid pipeline is the foundation. If cell state is wrong, the renderer just draws it wrong faster.
 - **Dirty tracking is critical for performance.** Only upload changed cells to the GPU vertex buffer. A full 220×50 grid is 11,000 cells — uploading all of them every frame is wasteful even with instancing.
 - **`wezterm-font` is the pragmatic choice** for the atlas. Writing a font rasterizer from scratch (FreeType bindings or `fontdue`) is a separate multi-week project. Vendoring the relevant parts of WezTerm's font layer saves that time.
