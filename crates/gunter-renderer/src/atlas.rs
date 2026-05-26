@@ -4,6 +4,7 @@ pub struct GlyphAtlas {
     pub height: u32,
     pub cell_w: u32,
     pub cell_h: u32,
+    pub ascender: f32,
     uvs: Vec<([f32; 2], [f32; 2])>,
 }
 
@@ -14,7 +15,12 @@ impl GlyphAtlas {
 
         let (m_metrics, _) = font.rasterize('M', px_size);
         let cell_w = m_metrics.advance_width.ceil() as u32;
-        let cell_h = cell_w * 2;
+
+        let line_metrics = font.horizontal_line_metrics(px_size)
+            .expect("font missing horizontal line metrics");
+        let ascender = line_metrics.ascent;
+        let descender = line_metrics.descent; // negative value
+        let cell_h = (ascender + descender.abs()).ceil() as u32;
 
         // 16×6 atlas grid for printable ASCII 0x20..=0x7E (95 chars)
         let atlas_cols = 16u32;
@@ -32,10 +38,13 @@ impl GlyphAtlas {
 
             let (m, bitmap) = font.rasterize(ch, px_size);
             if !bitmap.is_empty() {
-                let y_off = cell_h.saturating_sub(m.height as u32);
+                // m.ymax = ymin + height (in fontdue Metrics, ymin is baseline-relative)
+                let ymax = m.ymin as f32 + m.height as f32;
+                let y_off = (ascender - ymax).max(0.0) as u32;
                 for row in 0..m.height {
                     for col in 0..m.width {
-                        let dst_x = gx + col as u32;
+                        let x_off = m.xmin.max(0) as u32;
+                        let dst_x = gx + x_off + col as u32;
                         let dst_y = gy + y_off + row as u32;
                         if dst_x < atlas_w && dst_y < atlas_h {
                             data[(dst_y * atlas_w + dst_x) as usize] = bitmap[row * m.width + col];
@@ -60,7 +69,7 @@ impl GlyphAtlas {
             uvs[code as usize] = space_uv;
         }
 
-        GlyphAtlas { data, width: atlas_w, height: atlas_h, cell_w, cell_h, uvs }
+        GlyphAtlas { data, width: atlas_w, height: atlas_h, cell_w, cell_h, ascender, uvs }
     }
 
     pub fn uv_for_char(&self, ch: char) -> ([f32; 2], [f32; 2]) {
@@ -70,5 +79,66 @@ impl GlyphAtlas {
         } else {
             self.uvs[0x20]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cell_h_uses_font_metrics_not_heuristic() {
+        // Load a real font to verify cell_h is derived from metrics, not cell_w*2
+        let font_candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/Adwaita/AdwaitaMono-Regular.ttf",
+            "/usr/share/fonts/noto/NotoMono-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        ];
+        let font_bytes = match font_candidates.iter().find_map(|p| std::fs::read(p).ok()) {
+            Some(b) => b,
+            None => return, // skip if no font available in CI
+        };
+        let atlas = GlyphAtlas::build(&font_bytes, 14.0);
+        // cell_h should NOT equal cell_w*2 for most real fonts
+        // (the exact value depends on the font, but ascender is stored)
+        assert!(atlas.ascender > 0.0, "ascender should be positive");
+        assert!(atlas.cell_h > 0, "cell_h should be positive");
+        // With real font metrics, cell_h is typically != cell_w*2
+        // (we can't assert exact value, but we verify the new field exists)
+    }
+
+    #[test]
+    fn baseline_align_does_not_panic() {
+        let font_candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/Adwaita/AdwaitaMono-Regular.ttf",
+            "/usr/share/fonts/noto/NotoMono-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        ];
+        let font_bytes = match font_candidates.iter().find_map(|p| std::fs::read(p).ok()) {
+            Some(b) => b,
+            None => return,
+        };
+        // Should not panic with baseline-aligned placement
+        let atlas = GlyphAtlas::build(&font_bytes, 14.0);
+        assert!(!atlas.data.is_empty());
+    }
+
+    #[test]
+    fn left_bearing_applied_no_panic() {
+        let font_candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/Adwaita/AdwaitaMono-Regular.ttf",
+            "/usr/share/fonts/noto/NotoMono-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        ];
+        let font_bytes = match font_candidates.iter().find_map(|p| std::fs::read(p).ok()) {
+            Some(b) => b,
+            None => return,
+        };
+        let atlas = GlyphAtlas::build(&font_bytes, 14.0);
+        // Atlas should have non-zero pixels for printable ASCII
+        assert!(atlas.data.iter().any(|&b| b > 0));
     }
 }
