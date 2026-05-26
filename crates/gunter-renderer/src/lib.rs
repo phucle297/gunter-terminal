@@ -113,9 +113,16 @@ impl GunterRenderer {
         };
         surface.configure(&device, &config);
 
-        let font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
-        let font_bytes = std::fs::read(font_path)
-            .unwrap_or_else(|_| panic!("font not found: {font_path}"));
+        let font_candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/Adwaita/AdwaitaMono-Regular.ttf",
+            "/usr/share/fonts/noto/NotoMono-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        ];
+        let font_bytes = font_candidates
+            .iter()
+            .find_map(|p| std::fs::read(p).ok())
+            .unwrap_or_else(|| panic!("no monospace font found; tried: {font_candidates:?}"));
         let atlas = GlyphAtlas::build(&font_bytes, 14.0);
 
         let cell_w = atlas.cell_w as f32;
