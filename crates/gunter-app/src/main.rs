@@ -462,7 +462,7 @@ impl ApplicationHandler for GunterApp {
             WindowEvent::RedrawRequested => {
                 for (_, session) in &mut self.sessions {
                     while let Ok(bytes) = session.pty.pty_rx.try_recv() {
-                        let mut perf = GridPerformer::new(&mut session.grid);
+                        let mut perf = GridPerformer::new(&mut session.grid, Some(session.pty.pty_tx.clone()));
                         for &b in &bytes {
                             session.parser.advance(&mut perf, b);
                         }
@@ -683,7 +683,7 @@ mod tests {
 
     fn feed(grid: &mut Grid, input: &[u8]) {
         let mut parser = vte::Parser::new();
-        let mut performer = GridPerformer::new(grid);
+        let mut performer = GridPerformer::new(grid, None);
         for &byte in input {
             parser.advance(&mut performer, byte);
         }
