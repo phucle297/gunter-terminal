@@ -65,19 +65,20 @@ impl<'a> GridPerformer<'a> {
 impl<'a> vte::Perform for GridPerformer<'a> {
     /// Printable character: write to current cursor position and advance right.
     fn print(&mut self, c: char) {
+        // If deferred wrap is pending, execute it now before printing
+        if self.grid.wrap_next {
+            self.grid.wrap_next = false;
+            self.grid.cursor.0 = 0;
+            self.advance_line();
+        }
         let (x, y) = self.grid.cursor;
-        self.grid.write_cell(x, y, Cell {
-            ch: c,
-            fg: self.fg,
-            bg: self.bg,
-            flags: self.flags,
-        });
+        self.grid.write_cell(x, y, Cell { ch: c, fg: self.fg, bg: self.bg, flags: self.flags });
         let next_x = x + 1;
         if next_x < self.grid.cols {
             self.grid.cursor.0 = next_x;
         } else {
-            self.grid.cursor.0 = 0;
-            self.advance_line();
+            // Cursor is at last col — set deferred wrap, don't move cursor yet
+            self.grid.wrap_next = true;
         }
     }
 
@@ -89,6 +90,7 @@ impl<'a> vte::Perform for GridPerformer<'a> {
             }
             b'\r' => {
                 self.grid.cursor.0 = 0;
+                self.grid.wrap_next = false;
             }
             b'\x08' => {
                 let x = self.grid.cursor.0;
@@ -122,6 +124,7 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 let n = first_param(params, 1) as u16;
                 let y = self.grid.cursor.1;
                 self.grid.cursor.1 = y.saturating_sub(n);
+                self.grid.wrap_next = false;
             }
             // Cursor Down N
             'B' => {
@@ -129,6 +132,7 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 let y = self.grid.cursor.1;
                 let next = y + n;
                 self.grid.cursor.1 = next.min(self.grid.rows - 1);
+                self.grid.wrap_next = false;
             }
             // Cursor Right N
             'C' => {
@@ -136,12 +140,14 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 let x = self.grid.cursor.0;
                 let next = x + n;
                 self.grid.cursor.0 = next.min(self.grid.cols - 1);
+                self.grid.wrap_next = false;
             }
             // Cursor Left N
             'D' => {
                 let n = first_param(params, 1) as u16;
                 let x = self.grid.cursor.0;
                 self.grid.cursor.0 = x.saturating_sub(n);
+                self.grid.wrap_next = false;
             }
             // Cursor Next Line N
             'E' => {
@@ -150,6 +156,7 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 let next = y + n;
                 self.grid.cursor.1 = next.min(self.grid.rows - 1);
                 self.grid.cursor.0 = 0;
+                self.grid.wrap_next = false;
             }
             // Cursor Preceding Line N
             'F' => {
@@ -157,18 +164,21 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 let y = self.grid.cursor.1;
                 self.grid.cursor.1 = y.saturating_sub(n);
                 self.grid.cursor.0 = 0;
+                self.grid.wrap_next = false;
             }
             // Cursor Column Absolute (1-based)
             'G' => {
                 let col = first_param(params, 1) as u16;
                 let col = col.saturating_sub(1);
                 self.grid.cursor.0 = col.min(self.grid.cols - 1);
+                self.grid.wrap_next = false;
             }
             // Line Position Absolute (1-based)
             'd' => {
                 let row = first_param(params, 1) as u16;
                 let row = row.saturating_sub(1);
                 self.grid.cursor.1 = row.min(self.grid.rows - 1);
+                self.grid.wrap_next = false;
             }
             // Erase in Display
             'J' => {
@@ -195,6 +205,7 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                             for x in 0..cols { self.grid.write_cell(x, y, blank); }
                         }
                         self.grid.cursor = (0, 0);
+                        self.grid.wrap_next = false;
                     }
                     _ => {}
                 }
@@ -384,6 +395,18 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        // OSC 0 or OSC 2: set window title
+        if params.len() >= 2 {
+            let code = params[0];
+            if code == b"0" || code == b"2" {
+                if let Ok(title) = std::str::from_utf8(params[1]) {
+                    self.grid.title = title.to_string();
+                }
+            }
         }
     }
 }
@@ -738,6 +761,75 @@ mod tests {
         let mut parser = vte::Parser::new();
         for b in b"\x1b[48;2;10;20;30mX" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cells[0].bg, Color { r: 10, g: 20, b: 30 });
+    }
+
+    #[test]
+    fn wrap_next_deferred_wrap() {
+        // 4-col grid: print 4 chars — cursor should be AT col 3 with wrap_next=true
+        // print one more — it wraps to row 1 col 0, then cursor at col 1
+        let mut grid = Grid::new(4, 3);
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            // Print exactly 4 chars (fills row 0)
+            for b in b"ABCD" { parser.advance(&mut p, *b); }
+        }
+        // cursor should be at col 3 (last col), wrap_next=true
+        assert_eq!(grid.cursor.0, 3, "cursor should stay at last col");
+        assert!(grid.wrap_next, "wrap_next should be set");
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            // Print one more
+            for b in b"E" { parser.advance(&mut p, *b); }
+        }
+        // E should be at (0, 1), cursor at (1, 1)
+        assert_eq!(grid.cells[4].ch, 'E', "E should be at row 1 col 0");
+        assert_eq!(grid.cursor, (1, 1), "cursor should be at col 1, row 1");
+        assert!(!grid.wrap_next, "wrap_next should be cleared");
+    }
+
+    #[test]
+    fn wrap_next_cleared_by_cursor_move() {
+        let mut grid = Grid::new(4, 3);
+        // Set wrap_next manually
+        grid.wrap_next = true;
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // CSI H (cursor home) should clear wrap_next
+        for b in b"\x1b[H" { parser.advance(&mut p, *b); }
+        assert!(!grid.wrap_next, "cursor move should clear wrap_next");
+    }
+
+    #[test]
+    fn osc_window_title_set() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // OSC 2 ; "Hello" BEL
+        for b in b"\x1b]2;Hello\x07" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.title, "Hello");
+    }
+
+    #[test]
+    fn osc_icon_and_title_set() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // OSC 0 ; "MyTerm" BEL
+        for b in b"\x1b]0;MyTerm\x07" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.title, "MyTerm");
+    }
+
+    #[test]
+    fn osc_unknown_code_ignored() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // OSC 9 (notification, not standard) should not panic
+        for b in b"\x1b]9;some notification\x07" { parser.advance(&mut p, *b); }
+        // title should remain empty
+        assert_eq!(grid.title, "");
     }
 
     #[test]

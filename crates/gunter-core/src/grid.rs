@@ -68,6 +68,8 @@ pub struct Grid {
     pub mouse_sgr: bool,
     pub cursor_style: CursorStyle,
     pub scroll_offset: usize,
+    pub wrap_next: bool,
+    pub title: String,
 }
 
 const MAX_SCROLLBACK: usize = 5000;
@@ -93,6 +95,8 @@ impl Grid {
             mouse_sgr: false,
             cursor_style: CursorStyle::Block,
             scroll_offset: 0,
+            wrap_next: false,
+            title: String::new(),
         }
     }
 
@@ -120,6 +124,7 @@ impl Grid {
             x.min(self.cols.saturating_sub(1)),
             y.min(self.rows.saturating_sub(1)),
         );
+        self.wrap_next = false;
     }
 
     pub fn mark_all_dirty(&mut self) {
