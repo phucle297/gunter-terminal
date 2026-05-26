@@ -24,6 +24,15 @@ bitflags::bitflags! {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SavedCursor {
+    pub x: u16,
+    pub y: u16,
+    pub fg: Color,
+    pub bg: Color,
+    pub flags: CellFlags,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorStyle {
     Block,
@@ -70,6 +79,7 @@ pub struct Grid {
     pub scroll_offset: usize,
     pub wrap_next: bool,
     pub title: String,
+    pub saved_cursor: Option<SavedCursor>,
 }
 
 const MAX_SCROLLBACK: usize = 5000;
@@ -97,6 +107,7 @@ impl Grid {
             scroll_offset: 0,
             wrap_next: false,
             title: String::new(),
+            saved_cursor: None,
         }
     }
 
