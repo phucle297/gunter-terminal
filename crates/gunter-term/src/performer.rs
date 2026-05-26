@@ -1099,6 +1099,15 @@ mod tests {
     }
 
     #[test]
+    fn sgr_underline_flag_set() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[4mX" { parser.advance(&mut p, *b); }
+        assert!(grid.cells[0].flags.contains(CellFlags::UNDERLINE));
+    }
+
+    #[test]
     fn sgr_inverse_flag_set() {
         let mut grid = make_grid();
         let mut p = GridPerformer::new(&mut grid, None);

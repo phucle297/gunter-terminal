@@ -17,6 +17,7 @@ struct InstIn {
     @location(3) fg: vec3<f32>,
     @location(4) uv_min: vec2<f32>,
     @location(5) uv_max: vec2<f32>,
+    @location(6) flags: u32,
 };
 
 struct FragIn {
@@ -24,6 +25,7 @@ struct FragIn {
     @location(0) uv: vec2<f32>,
     @location(1) bg: vec3<f32>,
     @location(2) fg: vec3<f32>,
+    @location(3) @interpolate(flat) flags: u32,
 };
 
 @vertex
@@ -38,12 +40,19 @@ fn vs_main(v: VertIn, i: InstIn) -> FragIn {
     out.uv = mix(i.uv_min, i.uv_max, v.pos);
     out.bg = i.bg;
     out.fg = i.fg;
+    out.flags = i.flags;
     return out;
 }
 
 @fragment
 fn fs_main(in: FragIn) -> @location(0) vec4<f32> {
     let alpha = textureSample(atlas_tex, atlas_samp, in.uv).r;
-    let color = mix(in.bg, in.fg, alpha);
+    var color = mix(in.bg, in.fg, alpha);
+    // Underline: draw fg color in bottom ~15% of cell height
+    let cell_frac_y = fract(in.clip_pos.y / uniforms.cell_size.y);
+    let is_underline = (in.flags & 1u) != 0u;
+    if is_underline && cell_frac_y >= 0.85 {
+        color = in.fg;
+    }
     return vec4<f32>(color, 1.0);
 }

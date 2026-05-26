@@ -34,6 +34,8 @@ struct CellInstance {
     fg: [f32; 3],
     uv_min: [f32; 2],
     uv_max: [f32; 2],
+    flags: u32,   // bit 0 = underline
+    _pad: u32,    // pad to 16-byte alignment
 }
 
 #[repr(C)]
@@ -227,7 +229,8 @@ impl GunterRenderer {
             2 => Float32x3,
             3 => Float32x3,
             4 => Float32x2,
-            5 => Float32x2
+            5 => Float32x2,
+            6 => Uint32
         ];
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("cell_pipeline"),
@@ -286,6 +289,8 @@ impl GunterRenderer {
             fg: [171.0 / 255.0, 178.0 / 255.0, 191.0 / 255.0],
             uv_min: [0.0; 2],
             uv_max: [0.0; 2],
+            flags: 0,
+            _pad: 0,
         }; instance_count];
         let instance_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("instance_buf"),
@@ -410,6 +415,8 @@ impl GunterRenderer {
                         ],
                         uv_min,
                         uv_max,
+                        flags: if cell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
+                        _pad: 0,
                     };
                 }
             }
@@ -450,6 +457,8 @@ impl GunterRenderer {
                             ],
                             uv_min,
                             uv_max,
+                            flags: if cell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
+                            _pad: 0,
                         };
                         changed = true;
                     }
@@ -483,6 +492,8 @@ impl GunterRenderer {
                             ],
                             uv_min: puv_min,
                             uv_max: puv_max,
+                            flags: if pcell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
+                            _pad: 0,
                         };
                     }
                 }
@@ -509,6 +520,8 @@ impl GunterRenderer {
                         ],
                         uv_min,
                         uv_max,
+                        flags: if cell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
+                        _pad: 0,
                     };
                     changed = true;
                 }
