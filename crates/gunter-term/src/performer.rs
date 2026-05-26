@@ -830,14 +830,14 @@ mod tests {
     fn wrap_next_deferred_wrap() {
         let mut grid = Grid::new(4, 3);
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             for b in b"ABCD" { parser.advance(&mut p, *b); }
         }
         assert_eq!(grid.cursor.0, 3, "cursor should stay at last col");
         assert!(grid.wrap_next, "wrap_next should be set");
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             for b in b"E" { parser.advance(&mut p, *b); }
         }
@@ -851,7 +851,7 @@ mod tests {
         let mut grid = Grid::new(4, 3);
         grid.wrap_next = true;
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             for b in b"\x1b[H" { parser.advance(&mut p, *b); }
         }
@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn osc_window_title_set() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b]2;Hello\x07" { parser.advance(&mut p, *b); }
         assert_eq!(grid.title, "Hello");
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn osc_icon_and_title_set() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b]0;MyTerm\x07" { parser.advance(&mut p, *b); }
         assert_eq!(grid.title, "MyTerm");
@@ -879,7 +879,7 @@ mod tests {
     #[test]
     fn osc_unknown_code_ignored() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b]9;some notification\x07" { parser.advance(&mut p, *b); }
         assert_eq!(grid.title, "");
@@ -889,7 +889,7 @@ mod tests {
     fn esc_reverse_index_moves_cursor_up() {
         let mut grid = Grid::new(80, 24);
         grid.cursor_move(0, 5);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1bM" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.1, 4, "cursor should move up one row");
@@ -905,7 +905,7 @@ mod tests {
             flags: gunter_core::grid::CellFlags::NONE,
         });
         grid.cursor_move(0, 0);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1bM" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.1, 0, "cursor stays at top");
@@ -918,14 +918,14 @@ mod tests {
         let mut grid = Grid::new(80, 24);
         grid.cursor_move(10, 5);
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             for b in b"\x1b7" { parser.advance(&mut p, *b); }
             for b in b"\x1b[H" { parser.advance(&mut p, *b); }
         }
         assert_eq!(grid.cursor, (0, 0));
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             for b in b"\x1b8" { parser.advance(&mut p, *b); }
         }
@@ -936,7 +936,7 @@ mod tests {
     fn csi_save_restore_cursor_alias() {
         let mut grid = Grid::new(80, 24);
         grid.cursor_move(3, 7);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[s" { parser.advance(&mut p, *b); }
         for b in b"\x1b[H" { parser.advance(&mut p, *b); }
