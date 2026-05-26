@@ -383,6 +383,61 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                     }
                 }
             }
+            // CSI s — save cursor (alias for ESC 7)
+            's' if intermediates.is_empty() => {
+                use gunter_core::grid::SavedCursor;
+                let (x, y) = self.grid.cursor;
+                self.grid.saved_cursor = Some(SavedCursor {
+                    x, y,
+                    fg: self.fg,
+                    bg: self.bg,
+                    flags: self.flags,
+                });
+            }
+            // CSI u — restore cursor (alias for ESC 8)
+            'u' if intermediates.is_empty() => {
+                if let Some(sc) = self.grid.saved_cursor {
+                    self.grid.cursor_move(sc.x, sc.y);
+                    self.fg = sc.fg;
+                    self.bg = sc.bg;
+                    self.flags = sc.flags;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        match (intermediates, byte) {
+            // ESC M — reverse index
+            (b"", b'M') => {
+                let y = self.grid.cursor.1;
+                if y == self.grid.scroll_top {
+                    self.grid.scroll_down(1);
+                } else {
+                    self.grid.cursor.1 = y.saturating_sub(1);
+                }
+            }
+            // ESC 7 — save cursor
+            (b"", b'7') => {
+                use gunter_core::grid::SavedCursor;
+                let (x, y) = self.grid.cursor;
+                self.grid.saved_cursor = Some(SavedCursor {
+                    x, y,
+                    fg: self.fg,
+                    bg: self.bg,
+                    flags: self.flags,
+                });
+            }
+            // ESC 8 — restore cursor
+            (b"", b'8') => {
+                if let Some(sc) = self.grid.saved_cursor {
+                    self.grid.cursor_move(sc.x, sc.y);
+                    self.fg = sc.fg;
+                    self.bg = sc.bg;
+                    self.flags = sc.flags;
+                }
+            }
             _ => {}
         }
     }
@@ -738,6 +793,76 @@ mod tests {
         let mut parser = vte::Parser::new();
         for b in b"\x1b[48;2;10;20;30mX" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cells[0].bg, Color { r: 10, g: 20, b: 30 });
+    }
+
+    #[test]
+    fn esc_reverse_index_moves_cursor_up() {
+        let mut grid = Grid::new(80, 24);
+        grid.cursor_move(0, 5);
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // ESC M
+        for b in b"\x1bM" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cursor.1, 4, "cursor should move up one row");
+    }
+
+    #[test]
+    fn esc_reverse_index_at_top_scrolls_down() {
+        let mut grid = Grid::new(4, 4);
+        // Write sentinel at row 0
+        grid.write_cell(0, 0, gunter_core::grid::Cell {
+            ch: 'X',
+            fg: gunter_core::grid::Color::white(),
+            bg: gunter_core::grid::Color::black(),
+            flags: gunter_core::grid::CellFlags::NONE,
+        });
+        grid.cursor_move(0, 0); // cursor at scroll_top (0)
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // ESC M at top of scroll region → scrolls down
+        for b in b"\x1bM" { parser.advance(&mut p, *b); }
+        // cursor stays at row 0, but content scrolled down: row 1 now has the old row 0
+        assert_eq!(grid.cursor.1, 0, "cursor stays at top");
+        // row 0 should now be blank (the old row 0 shifted to row 1)
+        assert_eq!(grid.cells[0].ch, ' ', "row 0 col 0 should be blank after scroll down");
+        assert_eq!(grid.cells[4].ch, 'X', "old row 0 content should be at row 1");
+    }
+
+    #[test]
+    fn esc_save_restore_cursor() {
+        let mut grid = Grid::new(80, 24);
+        grid.cursor_move(10, 5);
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            // ESC 7 — save at (10, 5)
+            for b in b"\x1b7" { parser.advance(&mut p, *b); }
+            // Move cursor elsewhere
+            for b in b"\x1b[H" { parser.advance(&mut p, *b); } // cursor home
+        }
+        assert_eq!(grid.cursor, (0, 0));
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            // ESC 8 — restore
+            for b in b"\x1b8" { parser.advance(&mut p, *b); }
+        }
+        assert_eq!(grid.cursor, (10, 5), "cursor should be restored");
+    }
+
+    #[test]
+    fn csi_save_restore_cursor_alias() {
+        let mut grid = Grid::new(80, 24);
+        grid.cursor_move(3, 7);
+        let mut p = GridPerformer::new(&mut grid);
+        let mut parser = vte::Parser::new();
+        // CSI s — save
+        for b in b"\x1b[s" { parser.advance(&mut p, *b); }
+        // Move cursor
+        for b in b"\x1b[H" { parser.advance(&mut p, *b); }
+        // CSI u — restore
+        for b in b"\x1b[u" { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cursor, (3, 7));
     }
 
     #[test]
