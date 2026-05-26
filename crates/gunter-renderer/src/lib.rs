@@ -34,8 +34,8 @@ struct CellInstance {
     fg: [f32; 3],
     uv_min: [f32; 2],
     uv_max: [f32; 2],
-    flags: u32,   // bit 0 = underline
-    _pad: u32,    // pad to 16-byte alignment
+    flags: u32,   // bit 0 = underline, bit 1 = wide (2-cell width), bit 2 = skip (spacer)
+    _pad: u32,
 }
 
 #[repr(C)]
@@ -56,7 +56,7 @@ pub struct GunterRenderer {
     instance_buf: wgpu::Buffer,
     uniform_buf: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
-    _atlas_texture: wgpu::Texture,
+    atlas_texture: wgpu::Texture,
     atlas_bind_group: wgpu::BindGroup,
     atlas: GlyphAtlas,
     cell_w: f32,
@@ -341,7 +341,7 @@ impl GunterRenderer {
             instance_buf,
             uniform_buf,
             uniform_bind_group,
-            _atlas_texture: atlas_texture,
+            atlas_texture,
             atlas_bind_group,
             atlas,
             cell_w,
@@ -395,29 +395,8 @@ impl GunterRenderer {
                         grid.cells.get(live_idx).copied()
                             .unwrap_or_else(gunter_core::grid::Cell::blank)
                     };
-                    let (uv_min, uv_max) = self.atlas.uv_for_char(cell.ch);
-                    let mut fg_resolved = cell.fg.resolve(DEFAULT_FG);
-                    let mut bg_resolved = cell.bg.resolve(DEFAULT_BG);
-                    if cell.flags.contains(CellFlags::INVERSE) {
-                        std::mem::swap(&mut fg_resolved, &mut bg_resolved);
-                    }
-                    self.instances[display_idx] = CellInstance {
-                        cell_pos: [col as f32, dr as f32],
-                        bg: [
-                            bg_resolved.r as f32 / 255.0,
-                            bg_resolved.g as f32 / 255.0,
-                            bg_resolved.b as f32 / 255.0,
-                        ],
-                        fg: [
-                            fg_resolved.r as f32 / 255.0,
-                            fg_resolved.g as f32 / 255.0,
-                            fg_resolved.b as f32 / 255.0,
-                        ],
-                        uv_min,
-                        uv_max,
-                        flags: if cell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
-                        _pad: 0,
-                    };
+                    let inst = build_instance(&mut self.atlas, &cell, col as f32, dr as f32);
+                    self.instances[display_idx] = inst;
                 }
             }
             self.queue.write_buffer(
@@ -425,6 +404,7 @@ impl GunterRenderer {
                 0,
                 bytemuck::cast_slice(&self.instances),
             );
+            flush_dynamic_atlas(&self.atlas_texture, &mut self.atlas, &self.queue);
             grid.clear_dirty();
             self.last_cursor = (u16::MAX, u16::MAX);
         } else {
@@ -436,30 +416,8 @@ impl GunterRenderer {
                 for col in 0..self.cols {
                     let idx = (row as usize) * (self.cols as usize) + (col as usize);
                     if grid.dirty[idx] {
-                        let cell = &grid.cells[idx];
-                        let (uv_min, uv_max) = self.atlas.uv_for_char(cell.ch);
-                        let mut fg_resolved = cell.fg.resolve(DEFAULT_FG);
-                        let mut bg_resolved = cell.bg.resolve(DEFAULT_BG);
-                        if cell.flags.contains(CellFlags::INVERSE) {
-                            std::mem::swap(&mut fg_resolved, &mut bg_resolved);
-                        }
-                        self.instances[idx] = CellInstance {
-                            cell_pos: [col as f32, row as f32],
-                            bg: [
-                                bg_resolved.r as f32 / 255.0,
-                                bg_resolved.g as f32 / 255.0,
-                                bg_resolved.b as f32 / 255.0,
-                            ],
-                            fg: [
-                                fg_resolved.r as f32 / 255.0,
-                                fg_resolved.g as f32 / 255.0,
-                                fg_resolved.b as f32 / 255.0,
-                            ],
-                            uv_min,
-                            uv_max,
-                            flags: if cell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
-                            _pad: 0,
-                        };
+                        let cell = grid.cells[idx];
+                        self.instances[idx] = build_instance(&mut self.atlas, &cell, col as f32, row as f32);
                         changed = true;
                     }
                 }
@@ -471,30 +429,8 @@ impl GunterRenderer {
                 if px != u16::MAX && py != u16::MAX {
                     let pidx = py as usize * self.cols as usize + px as usize;
                     if pidx < self.instances.len() {
-                        let pcell = &grid.cells[pidx];
-                        let (puv_min, puv_max) = self.atlas.uv_for_char(pcell.ch);
-                        let mut pfg = pcell.fg.resolve(DEFAULT_FG);
-                        let mut pbg = pcell.bg.resolve(DEFAULT_BG);
-                        if pcell.flags.contains(CellFlags::INVERSE) {
-                            std::mem::swap(&mut pfg, &mut pbg);
-                        }
-                        self.instances[pidx] = CellInstance {
-                            cell_pos: [px as f32, py as f32],
-                            bg: [
-                                pbg.r as f32 / 255.0,
-                                pbg.g as f32 / 255.0,
-                                pbg.b as f32 / 255.0,
-                            ],
-                            fg: [
-                                pfg.r as f32 / 255.0,
-                                pfg.g as f32 / 255.0,
-                                pfg.b as f32 / 255.0,
-                            ],
-                            uv_min: puv_min,
-                            uv_max: puv_max,
-                            flags: if pcell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
-                            _pad: 0,
-                        };
+                        let pcell = grid.cells[pidx];
+                        self.instances[pidx] = build_instance(&mut self.atlas, &pcell, px as f32, py as f32);
                     }
                 }
             }
@@ -505,11 +441,18 @@ impl GunterRenderer {
                 let idx = cy as usize * self.cols as usize + cx as usize;
                 if idx < self.instances.len() {
                     let cell = &grid.cells[idx];
-                    let (uv_min, uv_max) = self.atlas.uv_for_char(cell.ch);
+                    let (uv_min, uv_max) = if cell.wide {
+                        self.atlas.uv_for_wide_char(cell.ch)
+                    } else {
+                        self.atlas.uv_for_char(cell.ch)
+                    };
                     // Atom One Dark cursor #528bff = rgb(82, 139, 255)
                     let cursor_bg = [82.0 / 255.0, 139.0 / 255.0, 1.0f32];
-                    let _ = CursorStyle::Block; // only Block implemented; field used for future match
+                    let _ = CursorStyle::Block;
                     let cell_bg = cell.bg.resolve(DEFAULT_BG);
+                    let mut flags = 0u32;
+                    if cell.flags.contains(CellFlags::UNDERLINE) { flags |= 1; }
+                    if cell.wide { flags |= 2; }
                     self.instances[idx] = CellInstance {
                         cell_pos: [cx as f32, cy as f32],
                         bg: cursor_bg,
@@ -520,7 +463,7 @@ impl GunterRenderer {
                         ],
                         uv_min,
                         uv_max,
-                        flags: if cell.flags.contains(CellFlags::UNDERLINE) { 1u32 } else { 0u32 },
+                        flags,
                         _pad: 0,
                     };
                     changed = true;
@@ -536,6 +479,7 @@ impl GunterRenderer {
                 );
             }
 
+            flush_dynamic_atlas(&self.atlas_texture, &mut self.atlas, &self.queue);
             grid.clear_dirty();
         }
 
@@ -588,4 +532,57 @@ impl GunterRenderer {
     pub fn cell_size(&self) -> (f32, f32) {
         (self.cell_w, self.cell_h)
     }
+}
+
+fn build_instance(atlas: &mut GlyphAtlas, cell: &gunter_core::grid::Cell, col: f32, row: f32) -> CellInstance {
+    let (uv_min, uv_max) = if cell.wide {
+        atlas.uv_for_wide_char(cell.ch)
+    } else {
+        atlas.uv_for_char(cell.ch)
+    };
+    let mut fg_resolved = cell.fg.resolve(DEFAULT_FG);
+    let mut bg_resolved = cell.bg.resolve(DEFAULT_BG);
+    if cell.flags.contains(CellFlags::INVERSE) {
+        std::mem::swap(&mut fg_resolved, &mut bg_resolved);
+    }
+    let mut flags = 0u32;
+    if cell.flags.contains(CellFlags::UNDERLINE) { flags |= 1; }
+    if cell.wide { flags |= 2; }
+    if cell.wide_spacer { flags |= 4; }
+    CellInstance {
+        cell_pos: [col, row],
+        bg: [bg_resolved.r as f32 / 255.0, bg_resolved.g as f32 / 255.0, bg_resolved.b as f32 / 255.0],
+        fg: [fg_resolved.r as f32 / 255.0, fg_resolved.g as f32 / 255.0, fg_resolved.b as f32 / 255.0],
+        uv_min,
+        uv_max,
+        flags,
+        _pad: 0,
+    }
+}
+
+fn flush_dynamic_atlas(atlas_texture: &wgpu::Texture, atlas: &mut GlyphAtlas, queue: &wgpu::Queue) {
+    if !atlas.dynamic_dirty { return; }
+    let dyn_y = atlas.dyn_pixel_y;
+    let dyn_h = atlas.height - dyn_y;
+    let dyn_offset = (dyn_y * atlas.width) as usize;
+    queue.write_texture(
+        wgpu::ImageCopyTexture {
+            texture: atlas_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: 0, y: dyn_y, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        &atlas.data[dyn_offset..],
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(atlas.width),
+            rows_per_image: Some(dyn_h),
+        },
+        wgpu::Extent3d {
+            width: atlas.width,
+            height: dyn_h,
+            depth_or_array_layers: 1,
+        },
+    );
+    atlas.dynamic_dirty = false;
 }

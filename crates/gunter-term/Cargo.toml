@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 vte = { workspace = true }
 gunter-core = { path = "../gunter-core" }
+unicode-width = { workspace = true }

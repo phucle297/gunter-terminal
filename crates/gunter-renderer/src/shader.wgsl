@@ -30,7 +30,9 @@ struct FragIn {
 
 @vertex
 fn vs_main(v: VertIn, i: InstIn) -> FragIn {
-    let px = (i.cell_pos.x + v.pos.x) * uniforms.cell_size.x;
+    let is_wide = (i.flags & 2u) != 0u;
+    let x_scale = select(1.0, 2.0, is_wide);
+    let px = (i.cell_pos.x + v.pos.x * x_scale) * uniforms.cell_size.x;
     let py = (i.cell_pos.y + v.pos.y) * uniforms.cell_size.y;
     let cx = (px / uniforms.viewport.x) * 2.0 - 1.0;
     let cy = 1.0 - (py / uniforms.viewport.y) * 2.0;
@@ -46,6 +48,10 @@ fn vs_main(v: VertIn, i: InstIn) -> FragIn {
 
 @fragment
 fn fs_main(in: FragIn) -> @location(0) vec4<f32> {
+    // Skip spacer cells (wide char right half)
+    if (in.flags & 4u) != 0u {
+        discard;
+    }
     let alpha = textureSample(atlas_tex, atlas_samp, in.uv).r;
     var color = mix(in.bg, in.fg, alpha);
     // Underline: draw fg color in bottom ~15% of cell height

@@ -1,4 +1,5 @@
 use gunter_core::grid::{Grid, Cell, Color, CellFlags, TermColor};
+use unicode_width::UnicodeWidthChar;
 
 /// Default foreground color: Atom One Dark #abb2bf
 const DEFAULT_FG: Color = Color { r: 171, g: 178, b: 191 };
@@ -56,7 +57,7 @@ impl<'a> GridPerformer<'a> {
     }
 
     fn blank(&self) -> Cell {
-        Cell { ch: ' ', fg: self.fg, bg: self.bg, flags: CellFlags::NONE }
+        Cell { ch: ' ', fg: self.fg, bg: self.bg, flags: CellFlags::NONE, wide: false, wide_spacer: false }
     }
 
     fn advance_line(&mut self) {
@@ -80,15 +81,31 @@ impl<'a> vte::Perform for GridPerformer<'a> {
             self.advance_line();
         }
         let (x, y) = self.grid.cursor;
-        self.grid.write_cell(x, y, Cell { ch: c, fg: self.fg, bg: self.bg, flags: self.flags });
-        let next_x = x + 1;
-        if next_x < self.grid.cols {
-            self.grid.cursor.0 = next_x;
-        } else if self.grid.auto_wrap {
-            // Cursor is at last col — set deferred wrap, don't move cursor yet
-            self.grid.wrap_next = true;
+        let char_width = c.width().unwrap_or(1);
+        if char_width == 2 {
+            self.grid.write_cell(x, y, Cell { ch: c, fg: self.fg, bg: self.bg, flags: self.flags, wide: true, wide_spacer: false });
+            if x + 1 < self.grid.cols {
+                self.grid.write_cell(x + 1, y, Cell { ch: ' ', fg: self.fg, bg: self.bg, flags: CellFlags::NONE, wide: false, wide_spacer: true });
+            }
+            let next_x = x + 2;
+            if next_x < self.grid.cols {
+                self.grid.cursor.0 = next_x;
+            } else if self.grid.auto_wrap {
+                self.grid.wrap_next = true;
+            } else {
+                self.grid.cursor.0 = self.grid.cols - 1;
+            }
+        } else {
+            self.grid.write_cell(x, y, Cell { ch: c, fg: self.fg, bg: self.bg, flags: self.flags, wide: false, wide_spacer: false });
+            let next_x = x + 1;
+            if next_x < self.grid.cols {
+                self.grid.cursor.0 = next_x;
+            } else if self.grid.auto_wrap {
+                // Cursor is at last col — set deferred wrap, don't move cursor yet
+                self.grid.wrap_next = true;
+            }
+            // if auto_wrap disabled, cursor stays at last col, no wrap_next
         }
-        // if auto_wrap disabled, cursor stays at last col, no wrap_next
     }
 
     /// C0/C1 control characters.
@@ -730,7 +747,7 @@ mod tests {
     fn newline_at_bottom_scrolls() {
         let mut grid = make_grid();
         // write 'A' at row 0 col 0, move to last row, then newline → scroll
-        grid.write_cell(0, 0, Cell { ch: 'A', fg: TermColor::Default, bg: TermColor::Default, flags: CellFlags::NONE });
+        grid.write_cell(0, 0, Cell { ch: 'A', fg: TermColor::Default, bg: TermColor::Default, flags: CellFlags::NONE, ..Default::default() });
         grid.cursor_move(0, 23);
         let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
@@ -936,6 +953,7 @@ mod tests {
             fg: gunter_core::grid::TermColor::Rgb(255, 255, 255),
             bg: gunter_core::grid::TermColor::Rgb(0, 0, 0),
             flags: gunter_core::grid::CellFlags::NONE,
+            ..Default::default()
         });
         grid.cursor_move(0, 0);
         let mut p = GridPerformer::new(&mut grid, None);
@@ -981,7 +999,7 @@ mod tests {
     fn alternate_screen_enter_exit() {
         let mut grid = make_grid();
         // write sentinel on primary screen
-        grid.write_cell(0, 0, Cell { ch: 'Z', fg: TermColor::Default, bg: TermColor::Default, flags: CellFlags::NONE });
+        grid.write_cell(0, 0, Cell { ch: 'Z', fg: TermColor::Default, bg: TermColor::Default, flags: CellFlags::NONE, ..Default::default() });
         {
             let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
@@ -1152,5 +1170,34 @@ mod tests {
         assert!(!grid.wrap_next, "wrap_next should not be set when auto_wrap disabled");
         // Col 3 should have the LAST char written (F)
         assert_eq!(grid.cells[3].ch, 'F', "last char should overwrite col 3");
+    }
+
+    // P3.4: Wide char tests
+    #[test]
+    fn wide_char_sets_wide_flag() {
+        let mut grid = Grid::new(10, 5);
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        // U+4E2D (中) is CJK width=2
+        for b in "中".as_bytes() { parser.advance(&mut p, *b); }
+        assert!(grid.cells[0].wide, "cell at col 0 should be wide");
+    }
+
+    #[test]
+    fn wide_char_writes_spacer_in_next_col() {
+        let mut grid = Grid::new(10, 5);
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in "中".as_bytes() { parser.advance(&mut p, *b); }
+        assert!(grid.cells[1].wide_spacer, "col 1 should be wide_spacer");
+    }
+
+    #[test]
+    fn wide_char_advances_cursor_by_two() {
+        let mut grid = Grid::new(10, 5);
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in "中".as_bytes() { parser.advance(&mut p, *b); }
+        assert_eq!(grid.cursor.0, 2, "cursor should advance by 2 for wide char");
     }
 }
