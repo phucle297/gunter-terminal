@@ -373,6 +373,28 @@ impl GunterRenderer {
     pub fn render(&mut self, grid: &mut Grid) {
         use gunter_core::grid::CursorStyle;
 
+        // Rebuild instance buffer when grid dimensions change.
+        let grid_count = grid.cols as usize * grid.rows as usize;
+        if grid_count != self.instances.len() {
+            self.cols = grid.cols;
+            self.rows = grid.rows;
+            self.instances = vec![CellInstance {
+                cell_pos: [0.0; 2],
+                bg: [DEFAULT_BG.r as f32 / 255.0, DEFAULT_BG.g as f32 / 255.0, DEFAULT_BG.b as f32 / 255.0],
+                fg: [DEFAULT_FG.r as f32 / 255.0, DEFAULT_FG.g as f32 / 255.0, DEFAULT_FG.b as f32 / 255.0],
+                uv_min: [0.0; 2],
+                uv_max: [0.0; 2],
+                flags: 0,
+                _pad: 0,
+            }; grid_count];
+            self.instance_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("instance_buf"),
+                size: (std::mem::size_of::<CellInstance>() * grid_count) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
         let instance_count = self.instances.len() as u32;
 
         if grid.scroll_offset > 0 {

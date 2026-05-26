@@ -414,6 +414,8 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                         7 => self.grid.auto_wrap = true,
                         25 => self.grid.cursor_visible = true,
                         1000 | 1002 => self.grid.mouse_reporting = true,
+                        1003 => self.grid.mouse_all_motion = true,
+                        1004 => self.grid.focus_reporting = true,
                         1006 => { self.grid.mouse_reporting = true; self.grid.mouse_sgr = true; }
                         2004 => self.grid.bracketed_paste = true,
                         1049 => self.grid.enter_alt(),
@@ -429,6 +431,8 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                         7 => self.grid.auto_wrap = false,
                         25 => self.grid.cursor_visible = false,
                         1000 | 1002 => self.grid.mouse_reporting = false,
+                        1003 => self.grid.mouse_all_motion = false,
+                        1004 => self.grid.focus_reporting = false,
                         1006 => { self.grid.mouse_reporting = false; self.grid.mouse_sgr = false; }
                         2004 => self.grid.bracketed_paste = false,
                         1049 => self.grid.exit_alt(),
@@ -1199,5 +1203,45 @@ mod tests {
         let mut parser = vte::Parser::new();
         for b in "中".as_bytes() { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.0, 2, "cursor should advance by 2 for wide char");
+    }
+
+    // P4.2 — focus tracking ?1004h/l
+    #[test]
+    fn dec_1004h_enables_focus_reporting() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[?1004h" { parser.advance(&mut p, *b); }
+        assert!(grid.focus_reporting, "?1004h should enable focus_reporting");
+    }
+
+    #[test]
+    fn dec_1004l_disables_focus_reporting() {
+        let mut grid = make_grid();
+        grid.focus_reporting = true;
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[?1004l" { parser.advance(&mut p, *b); }
+        assert!(!grid.focus_reporting, "?1004l should disable focus_reporting");
+    }
+
+    // P4.3 — mouse all-motion ?1003h/l
+    #[test]
+    fn dec_1003h_enables_mouse_all_motion() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[?1003h" { parser.advance(&mut p, *b); }
+        assert!(grid.mouse_all_motion, "?1003h should enable mouse_all_motion");
+    }
+
+    #[test]
+    fn dec_1003l_disables_mouse_all_motion() {
+        let mut grid = make_grid();
+        grid.mouse_all_motion = true;
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[?1003l" { parser.advance(&mut p, *b); }
+        assert!(!grid.mouse_all_motion, "?1003l should disable mouse_all_motion");
     }
 }

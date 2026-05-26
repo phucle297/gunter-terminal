@@ -347,7 +347,7 @@ impl ApplicationHandler for GunterApp {
                             }
                         }
                     }
-                    if let Some(bytes) = translate_key(&event) {
+                    if let Some(bytes) = translate_key(&event.logical_key, self.modifiers.state()) {
                         if let Some(session) = self.sessions.get(&self.active_id) {
                             let _ = session.pty.pty_tx.try_send(bytes);
                         }
@@ -425,6 +425,15 @@ impl ApplicationHandler for GunterApp {
                 }
             }
 
+            WindowEvent::Focused(focused) => {
+                if let Some(session) = self.sessions.get(&self.active_id) {
+                    if session.grid.focus_reporting {
+                        let seq = if focused { b"\x1b[I".to_vec() } else { b"\x1b[O".to_vec() };
+                        let _ = session.pty.pty_tx.try_send(seq);
+                    }
+                }
+            }
+
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_pos_px = (position.x, position.y);
                 if self.mouse_pressed {
@@ -437,6 +446,19 @@ impl ApplicationHandler for GunterApp {
                                 cx.min(session.grid.cols - 1),
                                 cy.min(session.grid.rows - 1),
                             ));
+                        }
+                    }
+                }
+                if let Some(session) = self.sessions.get(&self.active_id) {
+                    let send_motion = session.grid.mouse_all_motion
+                        || (session.grid.mouse_reporting && self.mouse_pressed);
+                    if send_motion {
+                        if let Some(r) = &self.renderer {
+                            let (cw, ch) = r.cell_size();
+                            let cx = (position.x / cw as f64) as u16 + 1;
+                            let cy = (position.y / ch as f64) as u16 + 1;
+                            let seq = format!("\x1b[<32;{};{}M", cx, cy);
+                            let _ = session.pty.pty_tx.try_send(seq.into_bytes());
                         }
                     }
                 }
@@ -494,12 +516,13 @@ impl ApplicationHandler for GunterApp {
     }
 }
 
-fn translate_key(event: &winit::event::KeyEvent) -> Option<Vec<u8>> {
-    match &event.logical_key {
+fn translate_key(logical_key: &Key, modifiers: winit::keyboard::ModifiersState) -> Option<Vec<u8>> {
+    match logical_key {
         Key::Character(s) => Some(s.as_str().as_bytes().to_vec()),
         Key::Named(named) => match named {
             NamedKey::Enter => Some(b"\r".to_vec()),
             NamedKey::Backspace => Some(b"\x7f".to_vec()),
+            NamedKey::Space => Some(b" ".to_vec()),
             NamedKey::Tab => Some(b"\x09".to_vec()),
             NamedKey::Escape => Some(b"\x1b".to_vec()),
             NamedKey::ArrowUp => Some(b"\x1b[A".to_vec()),
@@ -512,18 +535,30 @@ fn translate_key(event: &winit::event::KeyEvent) -> Option<Vec<u8>> {
             NamedKey::PageDown => Some(b"\x1b[6~".to_vec()),
             NamedKey::Delete => Some(b"\x1b[3~".to_vec()),
             NamedKey::Insert => Some(b"\x1b[2~".to_vec()),
-            NamedKey::F1 => Some(b"\x1bOP".to_vec()),
-            NamedKey::F2 => Some(b"\x1bOQ".to_vec()),
-            NamedKey::F3 => Some(b"\x1bOR".to_vec()),
-            NamedKey::F4 => Some(b"\x1bOS".to_vec()),
-            NamedKey::F5 => Some(b"\x1b[15~".to_vec()),
-            NamedKey::F6 => Some(b"\x1b[17~".to_vec()),
-            NamedKey::F7 => Some(b"\x1b[18~".to_vec()),
-            NamedKey::F8 => Some(b"\x1b[19~".to_vec()),
-            NamedKey::F9 => Some(b"\x1b[20~".to_vec()),
-            NamedKey::F10 => Some(b"\x1b[21~".to_vec()),
-            NamedKey::F11 => Some(b"\x1b[23~".to_vec()),
-            NamedKey::F12 => Some(b"\x1b[24~".to_vec()),
+            NamedKey::F1 | NamedKey::F2 | NamedKey::F3 | NamedKey::F4 |
+            NamedKey::F5 | NamedKey::F6 | NamedKey::F7 | NamedKey::F8 |
+            NamedKey::F9 | NamedKey::F10 | NamedKey::F11 | NamedKey::F12 => {
+                let shift = modifiers.shift_key() as u8;
+                let alt   = modifiers.alt_key()   as u8;
+                let ctrl  = modifiers.control_key() as u8;
+                let has_mod = shift | alt | ctrl;
+                let mod_code = 1 + shift + alt * 2 + ctrl * 4;
+                match named {
+                    NamedKey::F1 => if has_mod != 0 { Some(format!("\x1b[1;{}P", mod_code).into_bytes()) } else { Some(b"\x1bOP".to_vec()) },
+                    NamedKey::F2 => if has_mod != 0 { Some(format!("\x1b[1;{}Q", mod_code).into_bytes()) } else { Some(b"\x1bOQ".to_vec()) },
+                    NamedKey::F3 => if has_mod != 0 { Some(format!("\x1b[1;{}R", mod_code).into_bytes()) } else { Some(b"\x1bOR".to_vec()) },
+                    NamedKey::F4 => if has_mod != 0 { Some(format!("\x1b[1;{}S", mod_code).into_bytes()) } else { Some(b"\x1bOS".to_vec()) },
+                    NamedKey::F5  => if has_mod != 0 { Some(format!("\x1b[15;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[15~".to_vec()) },
+                    NamedKey::F6  => if has_mod != 0 { Some(format!("\x1b[17;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[17~".to_vec()) },
+                    NamedKey::F7  => if has_mod != 0 { Some(format!("\x1b[18;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[18~".to_vec()) },
+                    NamedKey::F8  => if has_mod != 0 { Some(format!("\x1b[19;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[19~".to_vec()) },
+                    NamedKey::F9  => if has_mod != 0 { Some(format!("\x1b[20;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[20~".to_vec()) },
+                    NamedKey::F10 => if has_mod != 0 { Some(format!("\x1b[21;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[21~".to_vec()) },
+                    NamedKey::F11 => if has_mod != 0 { Some(format!("\x1b[23;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[23~".to_vec()) },
+                    NamedKey::F12 => if has_mod != 0 { Some(format!("\x1b[24;{}~", mod_code).into_bytes()) } else { Some(b"\x1b[24~".to_vec()) },
+                    _ => None,
+                }
+            }
             _ => None,
         },
         _ => None,
@@ -678,8 +713,10 @@ fn restore_termios(saved: libc::termios) {
 
 #[cfg(test)]
 mod tests {
+    use super::translate_key;
     use gunter_core::grid::Grid;
     use gunter_term::performer::GridPerformer;
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
 
     fn feed(grid: &mut Grid, input: &[u8]) {
         let mut parser = vte::Parser::new();
@@ -703,5 +740,54 @@ mod tests {
         feed(&mut grid, b"\x1b[31mR");
         use gunter_core::grid::TermColor;
         assert_eq!(grid.cells[0].fg, TermColor::Rgb(224, 108, 117));
+    }
+
+    // P4.1 — modifier+Fkey sequences
+    #[test]
+    fn f1_no_mod_sends_ss3() {
+        let r = translate_key(&Key::Named(NamedKey::F1), ModifiersState::empty());
+        assert_eq!(r, Some(b"\x1bOP".to_vec()));
+    }
+
+    #[test]
+    fn shift_f1_sends_csi_modifier() {
+        let r = translate_key(&Key::Named(NamedKey::F1), ModifiersState::SHIFT);
+        assert_eq!(r, Some(b"\x1b[1;2P".to_vec()));
+    }
+
+    #[test]
+    fn shift_f2_sends_csi_modifier() {
+        let r = translate_key(&Key::Named(NamedKey::F2), ModifiersState::SHIFT);
+        assert_eq!(r, Some(b"\x1b[1;2Q".to_vec()));
+    }
+
+    #[test]
+    fn shift_f5_sends_csi_tilde_modifier() {
+        let r = translate_key(&Key::Named(NamedKey::F5), ModifiersState::SHIFT);
+        assert_eq!(r, Some(b"\x1b[15;2~".to_vec()));
+    }
+
+    #[test]
+    fn shift_f12_sends_csi_tilde_modifier() {
+        let r = translate_key(&Key::Named(NamedKey::F12), ModifiersState::SHIFT);
+        assert_eq!(r, Some(b"\x1b[24;2~".to_vec()));
+    }
+
+    #[test]
+    fn ctrl_f1_sends_csi_ctrl_modifier() {
+        let r = translate_key(&Key::Named(NamedKey::F1), ModifiersState::CONTROL);
+        assert_eq!(r, Some(b"\x1b[1;5P".to_vec()));
+    }
+
+    #[test]
+    fn alt_f1_sends_csi_alt_modifier() {
+        let r = translate_key(&Key::Named(NamedKey::F1), ModifiersState::ALT);
+        assert_eq!(r, Some(b"\x1b[1;3P".to_vec()));
+    }
+
+    #[test]
+    fn ctrl_f5_sends_csi_ctrl_tilde() {
+        let r = translate_key(&Key::Named(NamedKey::F5), ModifiersState::CONTROL);
+        assert_eq!(r, Some(b"\x1b[15;5~".to_vec()));
     }
 }
