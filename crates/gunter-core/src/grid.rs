@@ -80,6 +80,8 @@ pub struct Grid {
     pub wrap_next: bool,
     pub title: String,
     pub saved_cursor: Option<SavedCursor>,
+    pub app_cursor_keys: bool,
+    pub auto_wrap: bool,
 }
 
 const MAX_SCROLLBACK: usize = 5000;
@@ -108,6 +110,8 @@ impl Grid {
             wrap_next: false,
             title: String::new(),
             saved_cursor: None,
+            app_cursor_keys: false,
+            auto_wrap: true,
         }
     }
 

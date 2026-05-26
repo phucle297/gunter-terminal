@@ -84,10 +84,11 @@ impl<'a> vte::Perform for GridPerformer<'a> {
         let next_x = x + 1;
         if next_x < self.grid.cols {
             self.grid.cursor.0 = next_x;
-        } else {
+        } else if self.grid.auto_wrap {
             // Cursor is at last col — set deferred wrap, don't move cursor yet
             self.grid.wrap_next = true;
         }
+        // if auto_wrap disabled, cursor stays at last col, no wrap_next
     }
 
     /// C0/C1 control characters.
@@ -380,6 +381,8 @@ impl<'a> vte::Perform for GridPerformer<'a> {
             'h' if intermediates == b"?" => {
                 for sub in params.iter() {
                     match sub.first().copied().unwrap_or(0) {
+                        1 => self.grid.app_cursor_keys = true,
+                        7 => self.grid.auto_wrap = true,
                         25 => self.grid.cursor_visible = true,
                         1000 | 1002 => self.grid.mouse_reporting = true,
                         1006 => { self.grid.mouse_reporting = true; self.grid.mouse_sgr = true; }
@@ -393,6 +396,8 @@ impl<'a> vte::Perform for GridPerformer<'a> {
             'l' if intermediates == b"?" => {
                 for sub in params.iter() {
                     match sub.first().copied().unwrap_or(0) {
+                        1 => self.grid.app_cursor_keys = false,
+                        7 => self.grid.auto_wrap = false,
                         25 => self.grid.cursor_visible = false,
                         1000 | 1002 => self.grid.mouse_reporting = false,
                         1006 => { self.grid.mouse_reporting = false; self.grid.mouse_sgr = false; }
@@ -420,6 +425,22 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                     self.fg = sc.fg;
                     self.bg = sc.bg;
                     self.flags = sc.flags;
+                }
+            }
+            // P1.3: Primary Device Attributes (DA1)
+            'c' if intermediates.is_empty() => {
+                let param = first_param_raw(params, 0);
+                if param == 0 {
+                    self.respond(b"\x1b[?62;c");
+                }
+            }
+            // P1.4: Device Status Report (CPR)
+            'n' if intermediates.is_empty() => {
+                let param = first_param_raw(params, 0);
+                if param == 6 {
+                    let (col, row) = self.grid.cursor;
+                    let response = format!("\x1b[{};{}R", row + 1, col + 1);
+                    self.respond(response.as_bytes());
                 }
             }
             _ => {}
@@ -987,5 +1008,99 @@ mod tests {
         }
         let received = rx.try_recv().unwrap();
         assert_eq!(received, b"hello");
+    }
+
+    // P1.3: DA1 — Primary Device Attributes
+    #[test]
+    fn da1_response_sent() {
+        use std::sync::mpsc;
+        let mut grid = Grid::new(80, 24);
+        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(4);
+        {
+            let mut p = GridPerformer::new(&mut grid, Some(tx));
+            let mut parser = vte::Parser::new();
+            // ESC[c → DA1 query
+            for b in b"\x1b[c" { parser.advance(&mut p, *b); }
+        }
+        let response = rx.try_recv().expect("should have sent DA1 response");
+        assert_eq!(response, b"\x1b[?62;c");
+    }
+
+    // P1.4: CPR — Cursor Position Report
+    #[test]
+    fn cpr_response_sent() {
+        use std::sync::mpsc;
+        let mut grid = Grid::new(80, 24);
+        grid.cursor_move(4, 9); // col=4, row=9
+        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(4);
+        {
+            let mut p = GridPerformer::new(&mut grid, Some(tx));
+            let mut parser = vte::Parser::new();
+            // ESC[6n → CPR query
+            for b in b"\x1b[6n" { parser.advance(&mut p, *b); }
+        }
+        let response = rx.try_recv().expect("should have sent CPR response");
+        // row=9 → row+1=10, col=4 → col+1=5
+        assert_eq!(response, b"\x1b[10;5R");
+    }
+
+    // P1.7: Application Cursor Keys ?1h/l
+    #[test]
+    fn app_cursor_keys_mode_set() {
+        let mut grid = Grid::new(80, 24);
+        assert!(!grid.app_cursor_keys, "default should be off");
+        {
+            let mut p = GridPerformer::new(&mut grid, None);
+            let mut parser = vte::Parser::new();
+            // ESC[?1h → enable app cursor keys
+            for b in b"\x1b[?1h" { parser.advance(&mut p, *b); }
+        }
+        assert!(grid.app_cursor_keys, "app cursor keys should be enabled");
+        {
+            let mut p = GridPerformer::new(&mut grid, None);
+            let mut parser = vte::Parser::new();
+            // ESC[?1l → disable
+            for b in b"\x1b[?1l" { parser.advance(&mut p, *b); }
+        }
+        assert!(!grid.app_cursor_keys, "app cursor keys should be disabled");
+    }
+
+    // P1.8: DECAWM Auto-Wrap Mode ?7h/l
+    #[test]
+    fn decawm_mode_set() {
+        let mut grid = Grid::new(80, 24);
+        assert!(grid.auto_wrap, "default should be on");
+        {
+            let mut p = GridPerformer::new(&mut grid, None);
+            let mut parser = vte::Parser::new();
+            // ESC[?7l → disable auto-wrap
+            for b in b"\x1b[?7l" { parser.advance(&mut p, *b); }
+        }
+        assert!(!grid.auto_wrap);
+        {
+            let mut p = GridPerformer::new(&mut grid, None);
+            let mut parser = vte::Parser::new();
+            // ESC[?7h → re-enable
+            for b in b"\x1b[?7h" { parser.advance(&mut p, *b); }
+        }
+        assert!(grid.auto_wrap);
+    }
+
+    #[test]
+    fn decawm_disabled_cursor_sticks_at_last_col() {
+        // With auto_wrap=false, printing past end of line should NOT wrap
+        let mut grid = Grid::new(4, 3);
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        // Disable auto-wrap
+        for b in b"\x1b[?7l" { parser.advance(&mut p, *b); }
+        // Print 6 chars on 4-col grid
+        for b in b"ABCDEF" { parser.advance(&mut p, *b); }
+        // Cursor should be at last col (3), no wrap, E and F overwrite col 3
+        assert_eq!(grid.cursor.0, 3, "cursor should stick at last col");
+        assert_eq!(grid.cursor.1, 0, "cursor should stay on row 0");
+        assert!(!grid.wrap_next, "wrap_next should not be set when auto_wrap disabled");
+        // Col 3 should have the LAST char written (F)
+        assert_eq!(grid.cells[3].ch, 'F', "last char should overwrite col 3");
     }
 }
