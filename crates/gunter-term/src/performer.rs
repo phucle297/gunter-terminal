@@ -1,4 +1,4 @@
-use gunter_core::grid::{Grid, Cell, Color, CellFlags};
+use gunter_core::grid::{Grid, Cell, Color, CellFlags, TermColor};
 
 /// Default foreground color: Atom One Dark #abb2bf
 const DEFAULT_FG: Color = Color { r: 171, g: 178, b: 191 };
@@ -33,8 +33,8 @@ const BRIGHT_COLORS: [Color; 8] = [
 pub struct GridPerformer<'a> {
     pub grid: &'a mut Grid,
     pub response_tx: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
-    fg: Color,
-    bg: Color,
+    fg: TermColor,
+    bg: TermColor,
     flags: CellFlags,
 }
 
@@ -43,8 +43,8 @@ impl<'a> GridPerformer<'a> {
         GridPerformer {
             grid,
             response_tx,
-            fg: DEFAULT_FG,
-            bg: DEFAULT_BG,
+            fg: TermColor::Default,
+            bg: TermColor::Default,
             flags: CellFlags::NONE,
         }
     }
@@ -327,8 +327,8 @@ impl<'a> vte::Perform for GridPerformer<'a> {
             'm' => {
                 let mut iter = params.iter().peekable();
                 if iter.peek().is_none() {
-                    self.fg = DEFAULT_FG;
-                    self.bg = DEFAULT_BG;
+                    self.fg = TermColor::Default;
+                    self.bg = TermColor::Default;
                     self.flags = CellFlags::NONE;
                     return;
                 }
@@ -338,7 +338,7 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                 let mut i = 0;
                 while i < codes.len() {
                     match codes[i] {
-                        0 => { self.fg = DEFAULT_FG; self.bg = DEFAULT_BG; self.flags = CellFlags::NONE; }
+                        0 => { self.fg = TermColor::Default; self.bg = TermColor::Default; self.flags = CellFlags::NONE; }
                         1 => self.flags |= CellFlags::BOLD,
                         3 => self.flags |= CellFlags::ITALIC,
                         4 => self.flags |= CellFlags::UNDERLINE,
@@ -348,30 +348,42 @@ impl<'a> vte::Perform for GridPerformer<'a> {
                         23 => self.flags &= !CellFlags::ITALIC,
                         24 => self.flags &= !CellFlags::UNDERLINE,
                         27 => self.flags &= !CellFlags::INVERSE,
-                        30..=37 => self.fg = ANSI_COLORS[(codes[i] - 30) as usize],
+                        30..=37 => {
+                            let c = ANSI_COLORS[(codes[i] - 30) as usize];
+                            self.fg = TermColor::Rgb(c.r, c.g, c.b);
+                        }
                         38 => {
                             if i + 2 < codes.len() && codes[i+1] == 5 {
-                                self.fg = xterm256(codes[i+2]);
+                                self.fg = TermColor::Indexed(codes[i+2] as u8);
                                 i += 2;
                             } else if i + 4 < codes.len() && codes[i+1] == 2 {
-                                self.fg = Color { r: codes[i+2] as u8, g: codes[i+3] as u8, b: codes[i+4] as u8 };
+                                self.fg = TermColor::Rgb(codes[i+2] as u8, codes[i+3] as u8, codes[i+4] as u8);
                                 i += 4;
                             }
                         }
-                        39 => self.fg = DEFAULT_FG,
-                        40..=47 => self.bg = ANSI_COLORS[(codes[i] - 40) as usize],
+                        39 => self.fg = TermColor::Default,
+                        40..=47 => {
+                            let c = ANSI_COLORS[(codes[i] - 40) as usize];
+                            self.bg = TermColor::Rgb(c.r, c.g, c.b);
+                        }
                         48 => {
                             if i + 2 < codes.len() && codes[i+1] == 5 {
-                                self.bg = xterm256(codes[i+2]);
+                                self.bg = TermColor::Indexed(codes[i+2] as u8);
                                 i += 2;
                             } else if i + 4 < codes.len() && codes[i+1] == 2 {
-                                self.bg = Color { r: codes[i+2] as u8, g: codes[i+3] as u8, b: codes[i+4] as u8 };
+                                self.bg = TermColor::Rgb(codes[i+2] as u8, codes[i+3] as u8, codes[i+4] as u8);
                                 i += 4;
                             }
                         }
-                        49 => self.bg = DEFAULT_BG,
-                        90..=97 => self.fg = BRIGHT_COLORS[(codes[i] - 90) as usize],
-                        100..=107 => self.bg = BRIGHT_COLORS[(codes[i] - 100) as usize],
+                        49 => self.bg = TermColor::Default,
+                        90..=97 => {
+                            let c = BRIGHT_COLORS[(codes[i] - 90) as usize];
+                            self.fg = TermColor::Rgb(c.r, c.g, c.b);
+                        }
+                        100..=107 => {
+                            let c = BRIGHT_COLORS[(codes[i] - 100) as usize];
+                            self.bg = TermColor::Rgb(c.r, c.g, c.b);
+                        }
                         _ => {}
                     }
                     i += 1;
@@ -644,7 +656,7 @@ mod tests {
         let mut parser = vte::Parser::new();
         // SGR 31 = red fg, then print 'X'
         for b in b"\x1b[31mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].fg, Color { r: 224, g: 108, b: 117 });
+        assert_eq!(grid.cells[0].fg, TermColor::Rgb(224, 108, 117));
     }
 
     #[test]
@@ -654,7 +666,7 @@ mod tests {
         let mut parser = vte::Parser::new();
         // SGR 42 = green bg, then print 'X'
         for b in b"\x1b[42mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].bg, Color { r: 152, g: 195, b: 121 });
+        assert_eq!(grid.cells[0].bg, TermColor::Rgb(152, 195, 121));
     }
 
     #[test]
@@ -664,8 +676,8 @@ mod tests {
         let mut parser = vte::Parser::new();
         // Set red fg, then reset, then print
         for b in b"\x1b[31m\x1b[0mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].fg, DEFAULT_FG);
-        assert_eq!(grid.cells[0].bg, DEFAULT_BG);
+        assert_eq!(grid.cells[0].fg, TermColor::Default);
+        assert_eq!(grid.cells[0].bg, TermColor::Default);
     }
 
     #[test]
@@ -702,7 +714,7 @@ mod tests {
         let mut parser = vte::Parser::new();
         // SGR 31, then bare ESC[m (no param = reset)
         for b in b"\x1b[31m\x1b[mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].fg, DEFAULT_FG);
+        assert_eq!(grid.cells[0].fg, TermColor::Default);
     }
 
     #[test]
@@ -718,7 +730,7 @@ mod tests {
     fn newline_at_bottom_scrolls() {
         let mut grid = make_grid();
         // write 'A' at row 0 col 0, move to last row, then newline → scroll
-        grid.write_cell(0, 0, Cell { ch: 'A', fg: DEFAULT_FG, bg: DEFAULT_BG, flags: CellFlags::NONE });
+        grid.write_cell(0, 0, Cell { ch: 'A', fg: TermColor::Default, bg: TermColor::Default, flags: CellFlags::NONE });
         grid.cursor_move(0, 23);
         let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
@@ -816,7 +828,7 @@ mod tests {
         let mut parser = vte::Parser::new();
         // SGR 91 = bright red fg
         for b in b"\x1b[91mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].fg, Color { r: 224, g: 108, b: 117 });
+        assert_eq!(grid.cells[0].fg, TermColor::Rgb(224, 108, 117));
     }
 
     #[test]
@@ -824,9 +836,9 @@ mod tests {
         let mut grid = make_grid();
         let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
-        // SGR 38;5;196 → index 196: n=180, r=5,g=0,b=0 → Color{255,0,0}
+        // SGR 38;5;196 → index 196 stored as Indexed(196)
         for b in b"\x1b[38;5;196mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].fg, Color { r: 255, g: 0, b: 0 });
+        assert_eq!(grid.cells[0].fg, TermColor::Indexed(196));
     }
 
     #[test]
@@ -835,7 +847,7 @@ mod tests {
         let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[38;2;100;200;50mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].fg, Color { r: 100, g: 200, b: 50 });
+        assert_eq!(grid.cells[0].fg, TermColor::Rgb(100, 200, 50));
     }
 
     #[test]
@@ -844,7 +856,7 @@ mod tests {
         let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[48;2;10;20;30mX" { parser.advance(&mut p, *b); }
-        assert_eq!(grid.cells[0].bg, Color { r: 10, g: 20, b: 30 });
+        assert_eq!(grid.cells[0].bg, TermColor::Rgb(10, 20, 30));
     }
 
     #[test]
@@ -921,8 +933,8 @@ mod tests {
         let mut grid = Grid::new(4, 4);
         grid.write_cell(0, 0, gunter_core::grid::Cell {
             ch: 'X',
-            fg: gunter_core::grid::Color::white(),
-            bg: gunter_core::grid::Color::black(),
+            fg: gunter_core::grid::TermColor::Rgb(255, 255, 255),
+            bg: gunter_core::grid::TermColor::Rgb(0, 0, 0),
             flags: gunter_core::grid::CellFlags::NONE,
         });
         grid.cursor_move(0, 0);
@@ -969,7 +981,7 @@ mod tests {
     fn alternate_screen_enter_exit() {
         let mut grid = make_grid();
         // write sentinel on primary screen
-        grid.write_cell(0, 0, Cell { ch: 'Z', fg: DEFAULT_FG, bg: DEFAULT_BG, flags: CellFlags::NONE });
+        grid.write_cell(0, 0, Cell { ch: 'Z', fg: TermColor::Default, bg: TermColor::Default, flags: CellFlags::NONE });
         {
             let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
@@ -1084,6 +1096,44 @@ mod tests {
             for b in b"\x1b[?7h" { parser.advance(&mut p, *b); }
         }
         assert!(grid.auto_wrap);
+    }
+
+    #[test]
+    fn sgr_underline_flag_set() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[4mX" { parser.advance(&mut p, *b); }
+        assert!(grid.cells[0].flags.contains(CellFlags::UNDERLINE));
+    }
+
+    #[test]
+    fn sgr_inverse_flag_set() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[7mX" { parser.advance(&mut p, *b); }
+        assert!(grid.cells[0].flags.contains(CellFlags::INVERSE));
+    }
+
+    #[test]
+    fn sgr_27_clears_inverse() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[7m\x1b[27mX" { parser.advance(&mut p, *b); }
+        assert!(!grid.cells[0].flags.contains(CellFlags::INVERSE));
+    }
+
+    #[test]
+    fn sgr_default_fg_is_termcolor_default() {
+        use gunter_core::grid::TermColor;
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[31m\x1b[39mX" { parser.advance(&mut p, *b); }
+        // After SGR 31 (red fg) then SGR 39 (reset fg), fg should be Default
+        assert_eq!(grid.cells[0].fg, TermColor::Default);
     }
 
     #[test]

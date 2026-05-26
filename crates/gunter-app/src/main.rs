@@ -701,7 +701,7 @@ mod tests {
     fn ansi_colors_applied_in_grid() {
         let mut grid = Grid::new(80, 24);
         feed(&mut grid, b"\x1b[31mR");
-        use gunter_core::grid::Color;
-        assert_eq!(grid.cells[0].fg, Color { r: 224, g: 108, b: 117 });
+        use gunter_core::grid::TermColor;
+        assert_eq!(grid.cells[0].fg, TermColor::Rgb(224, 108, 117));
     }
 }

@@ -12,6 +12,24 @@ impl Color {
     pub const fn white() -> Self { Color { r: 255, g: 255, b: 255 } }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermColor {
+    Default,
+    Indexed(u8),
+    Rgb(u8, u8, u8),
+}
+
+impl TermColor {
+    /// Resolve to concrete RGB using the provided default color.
+    pub fn resolve(self, default_rgb: Color) -> Color {
+        match self {
+            TermColor::Default => default_rgb,
+            TermColor::Indexed(_) => default_rgb, // palette lookup not implemented; fall back
+            TermColor::Rgb(r, g, b) => Color { r, g, b },
+        }
+    }
+}
+
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct CellFlags: u8 {
@@ -28,8 +46,8 @@ bitflags::bitflags! {
 pub struct SavedCursor {
     pub x: u16,
     pub y: u16,
-    pub fg: Color,
-    pub bg: Color,
+    pub fg: TermColor,
+    pub bg: TermColor,
     pub flags: CellFlags,
 }
 
@@ -43,8 +61,8 @@ pub enum CursorStyle {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
     pub ch: char,
-    pub fg: Color,
-    pub bg: Color,
+    pub fg: TermColor,
+    pub bg: TermColor,
     pub flags: CellFlags,
 }
 
@@ -52,8 +70,8 @@ impl Cell {
     pub fn blank() -> Self {
         Cell {
             ch: ' ',
-            fg: Color { r: 171, g: 178, b: 191 },
-            bg: Color { r: 40,  g: 44,  b: 52  },
+            fg: TermColor::Default,
+            bg: TermColor::Default,
             flags: CellFlags::NONE,
         }
     }
@@ -259,7 +277,7 @@ mod tests {
     #[test]
     fn cell_write_sets_dirty_flag() {
         let mut g = Grid::new(80, 24);
-        let cell = Cell { ch: 'A', fg: Color::white(), bg: Color::black(), flags: CellFlags::NONE };
+        let cell = Cell { ch: 'A', fg: TermColor::Rgb(255,255,255), bg: TermColor::Rgb(0,0,0), flags: CellFlags::NONE };
         g.write_cell(0, 0, cell);
         assert!(g.dirty[0]);
     }
@@ -267,7 +285,7 @@ mod tests {
     #[test]
     fn clear_dirty_resets_all_flags() {
         let mut g = Grid::new(80, 24);
-        let cell = Cell { ch: 'B', fg: Color::black(), bg: Color::black(), flags: CellFlags::NONE };
+        let cell = Cell { ch: 'B', fg: TermColor::Rgb(0,0,0), bg: TermColor::Rgb(0,0,0), flags: CellFlags::NONE };
         g.write_cell(5, 3, cell);
         g.clear_dirty();
         assert!(g.dirty.iter().all(|&d| !d));
@@ -285,8 +303,8 @@ mod tests {
         let mut g = Grid::new(4, 3);
         // row 0: ABCD, row 1: EFGH, row 2: blank
         for col in 0u16..4 {
-            g.write_cell(col, 0, Cell { ch: (b'A' + col as u8) as char, fg: Color::white(), bg: Color::black(), flags: CellFlags::NONE });
-            g.write_cell(col, 1, Cell { ch: (b'E' + col as u8) as char, fg: Color::white(), bg: Color::black(), flags: CellFlags::NONE });
+            g.write_cell(col, 0, Cell { ch: (b'A' + col as u8) as char, fg: TermColor::Rgb(255,255,255), bg: TermColor::Rgb(0,0,0), flags: CellFlags::NONE });
+            g.write_cell(col, 1, Cell { ch: (b'E' + col as u8) as char, fg: TermColor::Rgb(255,255,255), bg: TermColor::Rgb(0,0,0), flags: CellFlags::NONE });
         }
         g.scroll_up(1);
         assert_eq!(g.cells[0].ch, 'E');
@@ -297,7 +315,7 @@ mod tests {
     fn scroll_down_shifts_rows() {
         let mut g = Grid::new(4, 3);
         for col in 0u16..4 {
-            g.write_cell(col, 0, Cell { ch: (b'A' + col as u8) as char, fg: Color::white(), bg: Color::black(), flags: CellFlags::NONE });
+            g.write_cell(col, 0, Cell { ch: (b'A' + col as u8) as char, fg: TermColor::Rgb(255,255,255), bg: TermColor::Rgb(0,0,0), flags: CellFlags::NONE });
         }
         g.scroll_down(1);
         // row 0 should be blank, row 1 should have ABCD
@@ -308,7 +326,7 @@ mod tests {
     #[test]
     fn alt_screen_swap() {
         let mut g = Grid::new(4, 2);
-        g.write_cell(0, 0, Cell { ch: 'X', fg: Color::white(), bg: Color::black(), flags: CellFlags::NONE });
+        g.write_cell(0, 0, Cell { ch: 'X', fg: TermColor::Rgb(255,255,255), bg: TermColor::Rgb(0,0,0), flags: CellFlags::NONE });
         g.enter_alt();
         assert_eq!(g.cells[0].ch, ' ');
         assert!(g.alt_active);
