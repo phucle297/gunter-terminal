@@ -32,18 +32,26 @@ const BRIGHT_COLORS: [Color; 8] = [
 /// VTE performer that writes parsed terminal output into a [`Grid`].
 pub struct GridPerformer<'a> {
     pub grid: &'a mut Grid,
+    pub response_tx: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
     fg: Color,
     bg: Color,
     flags: CellFlags,
 }
 
 impl<'a> GridPerformer<'a> {
-    pub fn new(grid: &'a mut Grid) -> Self {
+    pub fn new(grid: &'a mut Grid, response_tx: Option<std::sync::mpsc::SyncSender<Vec<u8>>>) -> Self {
         GridPerformer {
             grid,
+            response_tx,
             fg: DEFAULT_FG,
             bg: DEFAULT_BG,
             flags: CellFlags::NONE,
+        }
+    }
+
+    fn respond(&self, bytes: &[u8]) {
+        if let Some(tx) = &self.response_tx {
+            let _ = tx.try_send(bytes.to_vec());
         }
     }
 
@@ -434,7 +442,7 @@ mod tests {
     #[test]
     fn print_writes_char_to_cursor() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"A" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cells[0].ch, 'A');
@@ -443,7 +451,7 @@ mod tests {
     #[test]
     fn print_advances_cursor_right() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"AB" { parser.advance(&mut p, *b); }
         // 'A' at col 0, 'B' at col 1, cursor now at col 2
@@ -455,7 +463,7 @@ mod tests {
     #[test]
     fn newline_moves_cursor_down() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\n" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.1, 1);
@@ -465,7 +473,7 @@ mod tests {
     fn carriage_return_moves_to_col_zero() {
         let mut grid = make_grid();
         grid.cursor_move(10, 0);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\r" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.0, 0);
@@ -474,7 +482,7 @@ mod tests {
     #[test]
     fn csi_cursor_position_moves_cursor() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // CSI 5;10H → row=5, col=10 (1-based) → cursor=(9,4)
         for b in b"\x1b[5;10H" { parser.advance(&mut p, *b); }
@@ -485,7 +493,7 @@ mod tests {
     fn csi_cursor_position_default_is_home() {
         let mut grid = make_grid();
         grid.cursor_move(5, 5);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // CSI H with no params → (0,0)
         for b in b"\x1b[H" { parser.advance(&mut p, *b); }
@@ -496,7 +504,7 @@ mod tests {
     fn csi_cursor_up() {
         let mut grid = make_grid();
         grid.cursor_move(0, 5);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[3A" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.1, 2);
@@ -505,7 +513,7 @@ mod tests {
     #[test]
     fn csi_cursor_down() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[2B" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.1, 2);
@@ -514,7 +522,7 @@ mod tests {
     #[test]
     fn csi_cursor_right() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[5C" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.0, 5);
@@ -524,7 +532,7 @@ mod tests {
     fn csi_cursor_left() {
         let mut grid = make_grid();
         grid.cursor_move(10, 0);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[4D" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cursor.0, 6);
@@ -533,7 +541,7 @@ mod tests {
     #[test]
     fn sgr_sets_foreground_color() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // SGR 31 = red fg, then print 'X'
         for b in b"\x1b[31mX" { parser.advance(&mut p, *b); }
@@ -543,7 +551,7 @@ mod tests {
     #[test]
     fn sgr_sets_background_color() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // SGR 42 = green bg, then print 'X'
         for b in b"\x1b[42mX" { parser.advance(&mut p, *b); }
@@ -553,7 +561,7 @@ mod tests {
     #[test]
     fn sgr_reset_restores_defaults() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // Set red fg, then reset, then print
         for b in b"\x1b[31m\x1b[0mX" { parser.advance(&mut p, *b); }
@@ -564,7 +572,7 @@ mod tests {
     #[test]
     fn sgr_bold() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[1mX" { parser.advance(&mut p, *b); }
         assert!(grid.cells[0].flags.contains(CellFlags::BOLD));
@@ -573,7 +581,7 @@ mod tests {
     #[test]
     fn sgr_italic() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[3mX" { parser.advance(&mut p, *b); }
         assert!(grid.cells[0].flags.contains(CellFlags::ITALIC));
@@ -582,7 +590,7 @@ mod tests {
     #[test]
     fn sgr_underline() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[4mX" { parser.advance(&mut p, *b); }
         assert!(grid.cells[0].flags.contains(CellFlags::UNDERLINE));
@@ -591,7 +599,7 @@ mod tests {
     #[test]
     fn sgr_no_params_is_reset() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // SGR 31, then bare ESC[m (no param = reset)
         for b in b"\x1b[31m\x1b[mX" { parser.advance(&mut p, *b); }
@@ -601,7 +609,7 @@ mod tests {
     #[test]
     fn write_cell_marks_dirty() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"Z" { parser.advance(&mut p, *b); }
         assert!(grid.dirty[0]);
@@ -613,7 +621,7 @@ mod tests {
         // write 'A' at row 0 col 0, move to last row, then newline → scroll
         grid.write_cell(0, 0, Cell { ch: 'A', fg: DEFAULT_FG, bg: DEFAULT_BG, flags: CellFlags::NONE });
         grid.cursor_move(0, 23);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\n" { parser.advance(&mut p, *b); }
         // cursor stays on last row, content scrolled up
@@ -625,7 +633,7 @@ mod tests {
     #[test]
     fn print_wraps_at_end_of_line() {
         let mut grid = Grid::new(4, 3);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // 5 chars on a 4-col grid: should wrap
         for b in b"ABCDE" { parser.advance(&mut p, *b); }
@@ -640,9 +648,9 @@ mod tests {
     fn erase_to_end_of_line() {
         let mut grid = make_grid();
         // write 'X' at cols 0-4, then move to col 2 and CSI 0K
-        for b in b"XXXXX" { vte::Parser::new().advance(&mut GridPerformer::new(&mut grid), *b); }
+        for b in b"XXXXX" { vte::Parser::new().advance(&mut GridPerformer::new(&mut grid, None), *b); }
         grid.cursor_move(2, 0);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[0K" { parser.advance(&mut p, *b); }
         // cols 0,1 should still be 'X'; cols 2+ should be ' '
@@ -657,12 +665,12 @@ mod tests {
         let mut grid = make_grid();
         // write 'X' across row 0
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             for b in b"XXXXX" { parser.advance(&mut p, *b); }
         }
         grid.cursor_move(0, 0);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[2K" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cells[0].ch, ' ');
@@ -674,13 +682,13 @@ mod tests {
         let mut grid = make_grid();
         // write 'X' on row 0 and row 1
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             for b in b"XX\nXX" { parser.advance(&mut p, *b); }
         }
         // move to row 1 col 0, erase to end of display
         grid.cursor_move(0, 1);
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[0J" { parser.advance(&mut p, *b); }
         // row 0 should still have 'X' at cols 0,1
@@ -694,7 +702,7 @@ mod tests {
     #[test]
     fn scroll_region_set() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // CSI 2;5r → scroll_top=1 (0-based), scroll_bot=4 (0-based)
         for b in b"\x1b[2;5r" { parser.advance(&mut p, *b); }
@@ -705,7 +713,7 @@ mod tests {
     #[test]
     fn sgr_bright_fg() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // SGR 91 = bright red fg
         for b in b"\x1b[91mX" { parser.advance(&mut p, *b); }
@@ -715,7 +723,7 @@ mod tests {
     #[test]
     fn sgr_256_fg() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         // SGR 38;5;196 → index 196: n=180, r=5,g=0,b=0 → Color{255,0,0}
         for b in b"\x1b[38;5;196mX" { parser.advance(&mut p, *b); }
@@ -725,7 +733,7 @@ mod tests {
     #[test]
     fn sgr_truecolor_fg() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[38;2;100;200;50mX" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cells[0].fg, Color { r: 100, g: 200, b: 50 });
@@ -734,7 +742,7 @@ mod tests {
     #[test]
     fn sgr_truecolor_bg() {
         let mut grid = make_grid();
-        let mut p = GridPerformer::new(&mut grid);
+        let mut p = GridPerformer::new(&mut grid, None);
         let mut parser = vte::Parser::new();
         for b in b"\x1b[48;2;10;20;30mX" { parser.advance(&mut p, *b); }
         assert_eq!(grid.cells[0].bg, Color { r: 10, g: 20, b: 30 });
@@ -746,7 +754,7 @@ mod tests {
         // write sentinel on primary screen
         grid.write_cell(0, 0, Cell { ch: 'Z', fg: DEFAULT_FG, bg: DEFAULT_BG, flags: CellFlags::NONE });
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             // enter alt screen
             for b in b"\x1b[?1049h" { parser.advance(&mut p, *b); }
@@ -754,12 +762,34 @@ mod tests {
         assert!(grid.alt_active);
         assert_eq!(grid.cells[0].ch, ' '); // alt screen is blank
         {
-            let mut p = GridPerformer::new(&mut grid);
+            let mut p = GridPerformer::new(&mut grid, None);
             let mut parser = vte::Parser::new();
             // exit alt screen
             for b in b"\x1b[?1049l" { parser.advance(&mut p, *b); }
         }
         assert!(!grid.alt_active);
         assert_eq!(grid.cells[0].ch, 'Z'); // primary restored
+    }
+
+    #[test]
+    fn response_tx_is_stored() {
+        let mut grid = make_grid();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(4);
+        let p = GridPerformer::new(&mut grid, Some(tx));
+        assert!(p.response_tx.is_some());
+        drop(p);
+        drop(rx);
+    }
+
+    #[test]
+    fn respond_sends_to_channel() {
+        let mut grid = make_grid();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(4);
+        {
+            let p = GridPerformer::new(&mut grid, Some(tx));
+            p.respond(b"hello");
+        }
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received, b"hello");
     }
 }
