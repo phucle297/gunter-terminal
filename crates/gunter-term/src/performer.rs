@@ -794,10 +794,12 @@ mod tests {
         let mut grid = Grid::new(4, 3);
         // Set wrap_next manually
         grid.wrap_next = true;
-        let mut p = GridPerformer::new(&mut grid);
-        let mut parser = vte::Parser::new();
-        // CSI H (cursor home) should clear wrap_next
-        for b in b"\x1b[H" { parser.advance(&mut p, *b); }
+        {
+            let mut p = GridPerformer::new(&mut grid);
+            let mut parser = vte::Parser::new();
+            // CSI H (cursor home) should clear wrap_next
+            for b in b"\x1b[H" { parser.advance(&mut p, *b); }
+        }
         assert!(!grid.wrap_next, "cursor move should clear wrap_next");
     }
 
