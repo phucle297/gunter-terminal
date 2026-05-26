@@ -2,7 +2,7 @@ mod atlas;
 pub use atlas::GlyphAtlas;
 
 use std::sync::Arc;
-use gunter_core::grid::{Grid, Color};
+use gunter_core::grid::{Grid, Color, CellFlags};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -391,19 +391,22 @@ impl GunterRenderer {
                             .unwrap_or_else(gunter_core::grid::Cell::blank)
                     };
                     let (uv_min, uv_max) = self.atlas.uv_for_char(cell.ch);
-                    let fg_color = cell.fg.resolve(DEFAULT_FG);
-                    let bg_color = cell.bg.resolve(DEFAULT_BG);
+                    let mut fg_resolved = cell.fg.resolve(DEFAULT_FG);
+                    let mut bg_resolved = cell.bg.resolve(DEFAULT_BG);
+                    if cell.flags.contains(CellFlags::INVERSE) {
+                        std::mem::swap(&mut fg_resolved, &mut bg_resolved);
+                    }
                     self.instances[display_idx] = CellInstance {
                         cell_pos: [col as f32, dr as f32],
                         bg: [
-                            bg_color.r as f32 / 255.0,
-                            bg_color.g as f32 / 255.0,
-                            bg_color.b as f32 / 255.0,
+                            bg_resolved.r as f32 / 255.0,
+                            bg_resolved.g as f32 / 255.0,
+                            bg_resolved.b as f32 / 255.0,
                         ],
                         fg: [
-                            fg_color.r as f32 / 255.0,
-                            fg_color.g as f32 / 255.0,
-                            fg_color.b as f32 / 255.0,
+                            fg_resolved.r as f32 / 255.0,
+                            fg_resolved.g as f32 / 255.0,
+                            fg_resolved.b as f32 / 255.0,
                         ],
                         uv_min,
                         uv_max,
@@ -428,19 +431,22 @@ impl GunterRenderer {
                     if grid.dirty[idx] {
                         let cell = &grid.cells[idx];
                         let (uv_min, uv_max) = self.atlas.uv_for_char(cell.ch);
-                        let fg_color = cell.fg.resolve(DEFAULT_FG);
-                        let bg_color = cell.bg.resolve(DEFAULT_BG);
+                        let mut fg_resolved = cell.fg.resolve(DEFAULT_FG);
+                        let mut bg_resolved = cell.bg.resolve(DEFAULT_BG);
+                        if cell.flags.contains(CellFlags::INVERSE) {
+                            std::mem::swap(&mut fg_resolved, &mut bg_resolved);
+                        }
                         self.instances[idx] = CellInstance {
                             cell_pos: [col as f32, row as f32],
                             bg: [
-                                bg_color.r as f32 / 255.0,
-                                bg_color.g as f32 / 255.0,
-                                bg_color.b as f32 / 255.0,
+                                bg_resolved.r as f32 / 255.0,
+                                bg_resolved.g as f32 / 255.0,
+                                bg_resolved.b as f32 / 255.0,
                             ],
                             fg: [
-                                fg_color.r as f32 / 255.0,
-                                fg_color.g as f32 / 255.0,
-                                fg_color.b as f32 / 255.0,
+                                fg_resolved.r as f32 / 255.0,
+                                fg_resolved.g as f32 / 255.0,
+                                fg_resolved.b as f32 / 255.0,
                             ],
                             uv_min,
                             uv_max,
@@ -458,8 +464,11 @@ impl GunterRenderer {
                     if pidx < self.instances.len() {
                         let pcell = &grid.cells[pidx];
                         let (puv_min, puv_max) = self.atlas.uv_for_char(pcell.ch);
-                        let pfg = pcell.fg.resolve(DEFAULT_FG);
-                        let pbg = pcell.bg.resolve(DEFAULT_BG);
+                        let mut pfg = pcell.fg.resolve(DEFAULT_FG);
+                        let mut pbg = pcell.bg.resolve(DEFAULT_BG);
+                        if pcell.flags.contains(CellFlags::INVERSE) {
+                            std::mem::swap(&mut pfg, &mut pbg);
+                        }
                         self.instances[pidx] = CellInstance {
                             cell_pos: [px as f32, py as f32],
                             bg: [

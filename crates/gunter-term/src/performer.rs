@@ -1099,6 +1099,24 @@ mod tests {
     }
 
     #[test]
+    fn sgr_inverse_flag_set() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[7mX" { parser.advance(&mut p, *b); }
+        assert!(grid.cells[0].flags.contains(CellFlags::INVERSE));
+    }
+
+    #[test]
+    fn sgr_27_clears_inverse() {
+        let mut grid = make_grid();
+        let mut p = GridPerformer::new(&mut grid, None);
+        let mut parser = vte::Parser::new();
+        for b in b"\x1b[7m\x1b[27mX" { parser.advance(&mut p, *b); }
+        assert!(!grid.cells[0].flags.contains(CellFlags::INVERSE));
+    }
+
+    #[test]
     fn sgr_default_fg_is_termcolor_default() {
         use gunter_core::grid::TermColor;
         let mut grid = make_grid();
