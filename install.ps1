@@ -33,9 +33,11 @@ try {
     exit 1
 }
 
-# Verify SHA256
+# Verify SHA256 — .Content is byte[] in PS5, decode explicitly
 try {
-    $expected = (Invoke-WebRequest -Uri $sha256Url -UseBasicParsing).Content.Trim().Split(' ')[0].ToLower()
+    $resp     = Invoke-WebRequest -Uri $sha256Url -UseBasicParsing
+    $text     = [System.Text.Encoding]::UTF8.GetString($resp.Content).Trim()
+    $expected = $text.Split(' ')[0].ToLower()
     $actual   = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
     if ($expected -ne $actual) {
         Remove-Item $tmp -Force
@@ -44,20 +46,23 @@ try {
     }
     Write-Host "SHA256 verified."
 } catch {
-    Write-Warning "Could not fetch SHA256 checksum, skipping verification: $_"
+    Write-Warning "Could not verify SHA256 (non-fatal): $_"
 }
 
-# Extract to install dir
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Expand-Archive -Path $tmp -DestinationPath $InstallDir -Force
+# Extract to temp staging dir, then copy into install dir
+$stage = Join-Path $env:TEMP "gunter-stage-$Version"
+if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+Expand-Archive -Path $tmp -DestinationPath $stage -Force
 Remove-Item $tmp -Force
 
-# Move files out of nested zip subdirectory if present
-$nested = Join-Path $InstallDir "gunter-windows-x86_64"
-if (Test-Path $nested) {
-    Get-ChildItem $nested | Move-Item -Destination $InstallDir -Force
-    Remove-Item $nested -Recurse -Force
-}
+# Unwrap single nested subdirectory if present (zip contains gunter-windows-x86_64\*)
+$children = @(Get-ChildItem $stage)
+$src = if ($children.Count -eq 1 -and $children[0].PSIsContainer) { $children[0].FullName } else { $stage }
+
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+# Copy-Item -Recurse -Force handles existing dirs correctly
+Copy-Item -Path "$src\*" -Destination $InstallDir -Recurse -Force
+Remove-Item $stage -Recurse -Force
 
 # Add to user PATH if missing
 $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
