@@ -5,7 +5,6 @@ use std::sync::mpsc;
 use gunter_core::config::Config;
 use gunter_core::grid::Grid;
 use gunter_core::layout::{Axis, Layout, Rect};
-use gunter_core::server::{start_socket_server, OutputBroadcast};
 use gunter_renderer::GunterRenderer;
 use gunter_term::performer::GridPerformer;
 use uuid::Uuid;
@@ -31,9 +30,8 @@ struct SessionState {
 }
 
 impl SessionState {
-    fn new_with_shell_id(id: Uuid, cols: u16, rows: u16, shell_program: Option<&str>, shell_args: &[String]) -> Self {
-        let broadcast = OutputBroadcast::new();
-        let app_rx = broadcast.subscribe();
+    fn new_with_shell_id(cols: u16, rows: u16, shell_program: Option<&str>, shell_args: &[String]) -> Self {
+        let (pty_out_tx, app_rx) = mpsc::sync_channel::<Vec<u8>>(512);
         let (key_tx, key_rx) = mpsc::sync_channel::<Vec<u8>>(64);
         let (resize_tx, resize_rx) = mpsc::sync_channel::<(u16, u16)>(4);
 
@@ -41,7 +39,7 @@ impl SessionState {
             .map(|s| s.to_string())
             .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
         let args: Vec<String> = shell_args.to_vec();
-        let bc = broadcast.clone();
+        let bc = pty_out_tx;
 
         std::thread::spawn(move || {
             use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -78,12 +76,10 @@ impl SessionState {
                 }
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => bc.publish(buf[..n].to_vec()),
+                    Ok(n) => { let _ = bc.try_send(buf[..n].to_vec()); },
                 }
             }
         });
-
-        start_socket_server(id, key_tx.clone(), broadcast);
 
         SessionState {
             grid: Grid::new(cols, rows),
@@ -97,7 +93,7 @@ impl SessionState {
     }
 
     fn new_with_shell(cols: u16, rows: u16, shell_program: Option<&str>, shell_args: &[String]) -> Self {
-        Self::new_with_shell_id(Uuid::new_v4(), cols, rows, shell_program, shell_args)
+        Self::new_with_shell_id(cols, rows, shell_program, shell_args)
     }
 
     fn new(cols: u16, rows: u16) -> Self {
@@ -591,17 +587,6 @@ fn start_config_watcher(tx: mpsc::SyncSender<()>) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() >= 3 && args[1] == "attach" {
-        if let Ok(id) = args[2].parse::<Uuid>() {
-            attach_session(id);
-        } else {
-            eprintln!("gunter attach: invalid session id '{}'", args[2]);
-            std::process::exit(1);
-        }
-        return;
-    }
-
     env_logger::init();
 
     let config = Config::load();
@@ -609,8 +594,8 @@ fn main() {
     start_config_watcher(cfg_tx);
 
     let initial_id = Uuid::new_v4();
-    let initial_session = SessionState::new_with_shell_id(
-        initial_id, COLS, ROWS,
+    let initial_session = SessionState::new_with_shell(
+        COLS, ROWS,
         Some(&config.shell.program),
         &config.shell.args,
     );
@@ -637,79 +622,6 @@ fn main() {
     event_loop.run_app(&mut app).expect("run_app");
 }
 
-#[cfg(unix)]
-fn attach_session(id: Uuid) {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-
-    let path = gunter_core::server::socket_path(id);
-    let mut stream = match UnixStream::connect(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("gunter attach: cannot connect to {}: {e}", path.display());
-            std::process::exit(1);
-        }
-    };
-
-    // Put terminal in raw mode so keystrokes pass through unmodified.
-    let saved_termios = set_raw_mode();
-
-    let mut write_half = stream.try_clone().expect("clone socket");
-
-    // socket → stdout
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match stream.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let _ = std::io::stdout().write_all(&buf[..n]);
-                    let _ = std::io::stdout().flush();
-                }
-            }
-        }
-        std::process::exit(0);
-    });
-
-    // stdin → socket
-    let mut stdin_buf = [0u8; 256];
-    loop {
-        match std::io::stdin().read(&mut stdin_buf) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                if write_half.write_all(&stdin_buf[..n]).is_err() {
-                    break;
-                }
-            }
-        }
-    }
-
-    restore_termios(saved_termios);
-}
-
-#[cfg(not(unix))]
-fn attach_session(_id: Uuid) {
-    eprintln!("gunter attach: not supported on this platform");
-    std::process::exit(1);
-}
-
-#[cfg(unix)]
-fn set_raw_mode() -> libc::termios {
-    use std::mem::MaybeUninit;
-    let mut old: MaybeUninit<libc::termios> = MaybeUninit::uninit();
-    unsafe {
-        libc::tcgetattr(libc::STDIN_FILENO, old.as_mut_ptr());
-        let mut raw = old.assume_init();
-        libc::cfmakeraw(&mut raw);
-        libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw);
-        old.assume_init()
-    }
-}
-
-#[cfg(unix)]
-fn restore_termios(saved: libc::termios) {
-    unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &saved); }
-}
 
 #[cfg(test)]
 mod tests {
