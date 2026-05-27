@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows (x86_64-pc-windows-msvc)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc -p gunter-app
+
+      - name: Stage release artifacts
+        shell: pwsh
+        run: |
+          $staging = "staging\gunter-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\gunter.exe $staging\
+          Copy-Item README.md $staging\
+          if (Test-Path LICENSE) { Copy-Item LICENSE $staging\ }
+          if (Test-Path config\default.toml) {
+            New-Item -ItemType Directory -Force -Path "$staging\config" | Out-Null
+            Copy-Item config\default.toml "$staging\config\"
+          }
+          if (Test-Path assets\themes) {
+            Copy-Item -Recurse assets\themes "$staging\assets\themes"
+          }
+
+      - name: Create zip and compute SHA256
+        shell: pwsh
+        run: |
+          Compress-Archive -Path staging\gunter-windows-x86_64 `
+            -DestinationPath staging\gunter-windows-x86_64.zip
+          $hash = (Get-FileHash staging\gunter-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  gunter-windows-x86_64.zip" | Out-File -Encoding ascii staging\gunter-windows-x86_64.zip.sha256
+          Write-Host "SHA256: $hash"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            staging/gunter-windows-x86_64.zip
+            staging/gunter-windows-x86_64.zip.sha256

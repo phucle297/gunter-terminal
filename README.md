@@ -25,12 +25,26 @@ Default theme: Atom One Dark. Default font: ComicShannsMono Nerd Font Mono.
 
 ---
 
-## Building
+## Install
 
-> Requires: Rust stable, WSL2, MSVC toolchain, DX12-capable GPU
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/phucle297/gunter-terminal/develop/install.ps1 | iex
+```
+
+Downloads `gunter.exe` from the latest GitHub Release, verifies SHA256, and adds it to your user PATH.
+
+To pin a version: `$env:GUNTER_VERSION = "v0.2.0"; irm ... | iex`
+
+**Manual install:** Download `gunter-windows-x86_64.zip` from [Releases](https://github.com/phucle297/gunter-terminal/releases), unzip, add the folder to PATH.
+
+### Build from source
+
+> Requires: Rust stable, MSVC toolchain, DX12-capable GPU (Windows) or Vulkan/GL (Linux)
 
 ```bash
-cargo build --release
+cargo build --release -p gunter-app
 ```
 
 ---

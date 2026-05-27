@@ -162,7 +162,7 @@ impl ApplicationHandler for GunterApp {
                 ROWS as u32 * 16,
             ));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        let renderer = pollster::block_on(GunterRenderer::new(window.clone(), COLS, ROWS));
+        let renderer = pollster::block_on(GunterRenderer::new(window.clone(), COLS, ROWS, self.config.font.size));
 
         let (cw, ch) = renderer.cell_size();
         let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(

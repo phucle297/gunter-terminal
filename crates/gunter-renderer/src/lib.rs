@@ -68,7 +68,7 @@ pub struct GunterRenderer {
 }
 
 impl GunterRenderer {
-    pub async fn new(window: Arc<Window>, cols: u16, rows: u16) -> Self {
+    pub async fn new(window: Arc<Window>, cols: u16, rows: u16, font_size: f32) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -120,17 +120,31 @@ impl GunterRenderer {
         };
         surface.configure(&device, &config);
 
-        let font_candidates = [
+        // Embedded fallback — never panics (JetBrains Mono, SIL OFL)
+        static EMBEDDED_FONT: &[u8] =
+            include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+
+        #[cfg(target_os = "windows")]
+        let system_candidates: &[&str] = &[
+            r"C:\Windows\Fonts\consola.ttf",
+            r"C:\Windows\Fonts\cour.ttf",
+            r"C:\Windows\Fonts\lucon.ttf",
+        ];
+        #[cfg(not(target_os = "windows"))]
+        let system_candidates: &[&str] = &[
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
             "/usr/share/fonts/Adwaita/AdwaitaMono-Regular.ttf",
             "/usr/share/fonts/noto/NotoMono-Regular.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
         ];
-        let font_bytes = font_candidates
+
+        let font_bytes: std::borrow::Cow<[u8]> = system_candidates
             .iter()
             .find_map(|p| std::fs::read(p).ok())
-            .unwrap_or_else(|| panic!("no monospace font found; tried: {font_candidates:?}"));
-        let atlas = GlyphAtlas::build(&font_bytes, 14.0);
+            .map(std::borrow::Cow::Owned)
+            .unwrap_or(std::borrow::Cow::Borrowed(EMBEDDED_FONT));
+
+        let atlas = GlyphAtlas::build(&font_bytes, font_size);
 
         let cell_w = atlas.cell_w as f32;
         let cell_h = atlas.cell_h as f32;
